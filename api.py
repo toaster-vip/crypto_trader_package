@@ -71,8 +71,25 @@ def get_all_symbols():
 
     return list(set(usdt_symbols))
 
+_supported_symbols_cache = None  # 全局缓存
+
 def get_market_data(symbol):
-    # symbol: e.g. BTC_USDT
+    global _supported_symbols_cache
+
+    if _supported_symbols_cache is None:
+        # 获取所有支持的交易对
+        resp = requests.get(f"{BASE_URL}/public/get-instruments", params={"instrument_type": "SPOT"})
+        data = resp.json()
+
+        if data.get("code") != 0:
+            raise Exception(f"Instrument List Error: {data.get('message', 'Unknown error')}")
+
+        _supported_symbols_cache = set(item["instrument_name"] for item in data["result"]["instruments"])
+
+    if symbol not in _supported_symbols_cache:
+        raise Exception("Market API Error: Unsupported instrument exchange")
+
+    # 真正拉行情
     resp = requests.get(f"{BASE_URL}/public/get-ticker", params={"instrument_name": symbol})
     data = resp.json()
 
@@ -81,5 +98,5 @@ def get_market_data(symbol):
 
     ticker = data["result"]["data"]
     return {
-        "price": float(ticker["a"])  # ask price
+        "price": float(ticker["a"])
     }
