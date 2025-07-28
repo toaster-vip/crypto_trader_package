@@ -1,71 +1,34 @@
-from datetime import datetime
-from config import IS_REAL_TRADING, TAKE_PROFIT, STOP_LOSS
+import traceback
+from config import SUPPORTED_SYMBOLS
+from strategy import calculate_signal
+from trade_manager import execute_trade
+from api import get_market_data
 from notifier import send_wechat_notification
 
-# 用于模拟交易记录（如使用真实交易，可改为实际订单系统）
-portfolio = {}
+def main():
+    print("\033[96m✅ 自动交易脚本已启动\033[0m")
+    symbols = SUPPORTED_SYMBOLS
+    print(f"🎯 本轮检测币种：{symbols}")
 
-def execute_trade(symbol, signal, data):
-    price = float(data["price"]) if "price" in data else None
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for symbol in symbols:
+        print(f"\n🔍 处理 {symbol} 中...")
 
-    if symbol not in portfolio:
-        portfolio[symbol] = {
-            "holding": False,
-            "buy_price": 0.0,
-            "buy_time": "",
-        }
+        try:
+            data = get_market_data(symbol)
+            if not data:
+                print(f"\033[93m[警告] 无法获取 {symbol} 行情数据，跳过。\033[0m")
+                continue
 
-    position = portfolio[symbol]
+            signal = calculate_signal(data)
+            print(f"📈 策略信号为：{signal}")
+            execute_trade(symbol, signal, data)
 
-    # 买入信号
-    if signal > 0.2 and not position["holding"]:
-        print(f"[BUY] 买入 {symbol} @ {price} at {timestamp}")
-        position["holding"] = True
-        position["buy_price"] = price
-        position["buy_time"] = timestamp
+        except Exception as e:
+            err_msg = f"{symbol} 出错：{str(e)}\n{traceback.format_exc()}"
+            print(f"\033[91m❌ {err_msg}\033[0m")
+            send_wechat_notification(f"❌ 自动交易异常 - {symbol}", err_msg)
 
-        if IS_REAL_TRADING:
-            # 真实下单逻辑放这里（调用交易所 API）
-            pass
+    print("\n\033[92m✅ 所有币种处理完成，脚本结束。\033[0m")
 
-        send_wechat_notification(
-            f"💰 成交：买入 {symbol}",
-            f"价格：{price}\n时间：{timestamp}"
-        )
-
-    # 卖出信号
-    elif signal < -0.2 and position["holding"]:
-        print(f"[SELL] 卖出 {symbol} @ {price} at {timestamp}")
-        position["holding"] = False
-        pnl = round((price - position["buy_price"]) / position["buy_price"] * 100, 2)
-
-        if IS_REAL_TRADING:
-            # 真实卖出逻辑放这里
-            pass
-
-        send_wechat_notification(
-            f"💸 成交：卖出 {symbol}",
-            f"价格：{price}\n盈亏：{pnl}%\n时间：{timestamp}"
-        )
-
-    # 止盈止损判断（在持仓状态下）
-    elif position["holding"]:
-        entry = position["buy_price"]
-        change = (price - entry) / entry
-        if change >= TAKE_PROFIT:
-            print(f"[TP] 止盈 {symbol} @ {price} (+{change*100:.2f}%)")
-            position["holding"] = False
-            send_wechat_notification(
-                f"✅ 止盈卖出 {symbol}",
-                f"价格：{price}\n盈利：{change*100:.2f}%\n时间：{timestamp}"
-            )
-        elif change <= -STOP_LOSS:
-            print(f"[SL] 止损 {symbol} @ {price} ({change*100:.2f}%)")
-            position["holding"] = False
-            send_wechat_notification(
-                f"⚠️ 止损卖出 {symbol}",
-                f"价格：{price}\n亏损：{change*100:.2f}%\n时间：{timestamp}"
-            )
-    else:
-        print(f"[HOLD] 继续观望 {symbol}")
+if __name__ == "__main__":
+    main()
