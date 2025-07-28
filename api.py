@@ -29,11 +29,11 @@ def get_market_data(symbol: str):
         }
     except Exception:
         return {}
-
 def get_all_symbols():
-    url = f"{BASE_URL}/public/get-instruments?instrument_type=SPOT"
+    url = f"{BASE_URL}/public/get-instruments"
     try:
-        resp = requests.get(url)
+        payload = {"instrument_type": "SPOT"}
+        resp = requests.post(url, json=payload)
         result = resp.json()
         symbols = []
         for item in result.get("result", {}).get("instruments", []):
@@ -42,5 +42,6 @@ def get_all_symbols():
                 if base.isalpha() and len(base) <= 10:
                     symbols.append(base)
         return sorted(list(set(symbols)))
-    except Exception:
+    except Exception as e:
+        print("[ERROR] 获取币种失败：", e)
         return []
