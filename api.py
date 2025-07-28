@@ -96,10 +96,11 @@ def get_market_data(symbol):
     if data.get("code") != 0:
         raise Exception(f"get_market_data 返回错误：{data.get('message', 'Unknown error')}")
 
-    ticker = data.get("result", {}).get("data")
-    if not isinstance(ticker, dict):
-        raise Exception("get_market_data 处理异常：Ticker 返回数据类型异常，预期为 dict")
+    ticker_list = data.get("result", {}).get("data", [])
+    if not isinstance(ticker_list, list) or not ticker_list:
+        raise Exception("get_market_data 处理异常：Ticker 返回数据为空或非列表")
 
+    ticker = ticker_list[0]  # 取第一个数据项
     return {
         "price": float(ticker.get("a", 0))  # ask price
     }
