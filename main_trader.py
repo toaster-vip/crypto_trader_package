@@ -1,5 +1,5 @@
 from config import SUPPORTED_SYMBOLS, IS_REAL_TRADING
-from api import get_account_holdings, get_all_symbols, get_market
+from api import get_account_holdings, get_all_symbols, get_market_data
 import time
 from datetime import datetime
 from config import (
