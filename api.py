@@ -1,6 +1,7 @@
 import requests
 from config import BASE_URL, API_KEY, API_SECRET
 import hmac, hashlib, time, json
+from urllib.parse import urlencode
 
 def get_headers(payload: dict):
     t = str(int(time.time() * 1000))
