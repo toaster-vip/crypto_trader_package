@@ -1,14 +1,9 @@
-from config import SUPPORTED_SYMBOLS, IS_REAL_TRADING
-from api import get_account_holdings, get_market_data
-import time
-from datetime import datetime
-from config import (
-    IS_REAL_TRADING, SUPPORTED_SYMBOLS, TAKE_PROFIT, STOP_LOSS,
-    STRATEGY_WEIGHTS, THRESHOLDS
-)
-from api import get_market_data, get_all_symbols, get_account_holdings
+from config import IS_REAL_TRADING, TAKE_PROFIT, STOP_LOSS, STRATEGY_WEIGHTS, THRESHOLDS
+from api import get_account_holdings, get_supported_symbols, get_market_data, filter_valid_holdings
 from strategy import calculate_signal
 from notifier import send_wechat_notification
+
+from datetime import datetime
 
 portfolio = {}
 
@@ -33,7 +28,7 @@ def execute_trade(symbol, signal, data):
         position["buy_time"] = timestamp
 
         if IS_REAL_TRADING:
-            # 实际下单逻辑
+            # TODO: 实际下单逻辑
             pass
 
         send_wechat_notification(
@@ -48,7 +43,7 @@ def execute_trade(symbol, signal, data):
         pnl = round((price - position["buy_price"]) / position["buy_price"] * 100, 2)
 
         if IS_REAL_TRADING:
-            # 实际卖出逻辑
+            # TODO: 实际卖出逻辑
             pass
 
         send_wechat_notification(
@@ -76,25 +71,31 @@ def execute_trade(symbol, signal, data):
     else:
         print(f"\033[90m[HOLD] 继续观望 {symbol}\033[0m")
 
-def main():
-    print("✅ 自动交易脚本已启动")
-    raw_holdings = get_account_holdings()
-    holdings = filter_valid_holdings(raw_holdings)
-    market_symbols = get_all_symbols()
 
-    if not market_symbols:
-        print("❌ 获取币种失败")
-        send_wechat_notification("❌ 自动交易异常 - 获取币种失败", "")
+def main():
+    print("\033[32m✅ 自动交易脚本已启动\033[0m")
+    
+    # 获取账户币种并筛选有效交易对
+    raw_holdings = get_account_holdings()
+    valid_holdings = filter_valid_holdings(raw_holdings)
+    holding_symbols = [h["symbol"] for h in valid_holdings]
+
+    # 使用支持交易的币种列表
+    supported_symbols = get_supported_symbols()
+    if not supported_symbols:
+        print("\033[91m❌ 获取支持交易币种失败\033[0m")
+        send_wechat_notification("❌ 自动交易异常 - 获取支持币种失败", "")
         return
 
-    print(f"🎯 本轮检测币种：{market_symbols}")
-    for symbol in market_symbols:
+    print(f"\033[36m🎯 本轮检测币种：{list(supported_symbols)[:20]} ...（总数 {len(supported_symbols)}）\033[0m")
+
+    for symbol in supported_symbols:
         try:
             print(f"\n🔍 处理 {symbol} 中...")
             data = get_market_data(symbol)
             signal = calculate_signal(symbol, data)
             print(f"📈 策略信号为：{signal}")
-            in_hold = symbol in holdings
+            in_hold = symbol in holding_symbols
 
             if in_hold and signal < THRESHOLDS["sell"]:
                 execute_trade(symbol, signal, data)
@@ -103,10 +104,11 @@ def main():
             else:
                 print(f"\033[90m[SKIP] 无需操作 {symbol}\033[0m")
         except Exception as e:
-            print(f"❌ {symbol} 出错：{e}")
+            print(f"\033[91m❌ {symbol} 出错：{e}\033[0m")
             send_wechat_notification(f"❌ 自动交易异常 - {symbol}", str(e))
 
-    print("\n✅ 所有币种处理完成，脚本结束。\n")
+    print("\n\033[32m✅ 所有币种处理完成，脚本结束。\033[0m\n")
+
 
 if __name__ == "__main__":
     main()
