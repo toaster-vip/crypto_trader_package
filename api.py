@@ -1,65 +1,73 @@
+import time
+import hmac
+import hashlib
 import requests
-from config import BASE_URL, API_KEY, API_SECRET
-import hmac, hashlib, time, json
-from urllib.parse import urlencode
+import json
+from config import API_KEY, API_SECRET, BASE_URL
 
-def get_headers(payload: dict):
-    t = str(int(time.time() * 1000))
-    msg = t + API_KEY + json.dumps(payload)
-    sign = hmac.new(
-        bytes(API_SECRET, 'utf-8'),
-        msg=bytes(msg, 'utf-8'),
-        digestmod=hashlib.sha256
-    ).hexdigest()
-    return {
-        'Content-Type': 'application/json',
-        'X-MBX-APIKEY': API_KEY,
-        'X-CREX-APIKEY': API_KEY,
-        'X-SIGNATURE': sign,
-        'X-TIMESTAMP': t
+def _signed_post(method, params=None):
+    if params is None:
+        params = {}
+
+    req = {
+        "id": int(time.time() * 1000),
+        "method": method,
+        "api_key": API_KEY,
+        "params": params,
+        "nonce": int(time.time() * 1000)
     }
 
-def get_market_data(symbol: str):
-    url = f"{BASE_URL}/public/get-ticker"
-    payload = {"instrument_name": f"{symbol}_USDT"}
-    try:
-        resp = requests.post(url, json=payload)
-        result = resp.json()
-        return {
-            "price": result["result"]["data"]["a"]  # ask 价格
-        }
-    except Exception:
-        return {}
+    param_string = ""
+    for key in sorted(req["params"]):
+        param_string += key + str(req["params"][key])
+
+    to_sign = req["method"] + str(req["id"]) + req["api_key"] + param_string + str(req["nonce"])
+    req["sig"] = hmac.new(
+        API_SECRET.encode(),
+        msg=to_sign.encode(),
+        digestmod=hashlib.sha256
+    ).hexdigest()
+
+    response = requests.post(f"{BASE_URL}/{method}", json=req)
+    data = response.json()
+
+    if data.get("code") != 0:
+        raise Exception(f"API Error: {data.get('message', 'Unknown error')}")
+
+    return data["result"]
+
+def get_account_holdings():
+    result = _signed_post("private/get-account-summary")
+    balances = result.get("accounts", [])
+    holdings = []
+    for acc in balances:
+        if float(acc["total_balance"]) > 0:
+            holdings.append({
+                "currency": acc["currency"],
+                "total": float(acc["total_balance"])
+            })
+    return holdings
+
 def get_all_symbols():
-    """
-    从账户余额中提取所有有资产或可交易的币种列表
-    """
-    try:
-        url = f"{BASE_URL}/private/get-account-summary"
-        params = {
-            "api_key": API_KEY,
-            "req_time": int(time.time() * 1000),
-        }
-        param_str = urlencode(sorted(params.items()))
-        to_sign = f"{param_str}"
-        sign = hmac.new(
-            bytes(API_SECRET.encode('utf-8')),
-            msg=bytes(to_sign.encode('utf-8')),
-            digestmod=hashlib.sha256
-        ).hexdigest()
-        params["sig"] = sign
+    result = _signed_post("private/get-account-summary")
+    balances = result.get("accounts", [])
+    usdt_symbols = []
 
-        resp = requests.post(url, json=params)
-        result = resp.json()
+    for acc in balances:
+        symbol = f"{acc['currency']}_USDT"
+        usdt_symbols.append(acc["currency"])
 
-        symbols = []
-        for asset in result.get("result", {}).get("accounts", []):
-            currency = asset.get("currency")
-            total = float(asset.get("available", 0)) + float(asset.get("balance", 0))
-            if total > 0 or currency in ["USDT", "USDC"]:  # 保留可用资金币种
-                symbols.append(currency)
+    return list(set(usdt_symbols))
 
-        return sorted(list(set(symbols)))
-    except Exception as e:
-        print("[ERROR] 获取币种失败：", e)
-        return []
+def get_market_data(symbol):
+    # symbol: e.g. BTC_USDT
+    resp = requests.get(f"{BASE_URL}/public/get-ticker", params={"instrument_name": symbol})
+    data = resp.json()
+
+    if data.get("code") != 0:
+        raise Exception(f"Market API Error: {data.get('message', 'Unknown error')}")
+
+    ticker = data["result"]["data"]
+    return {
+        "price": float(ticker["a"])  # ask price
+    }
