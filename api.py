@@ -85,31 +85,21 @@ def filter_valid_holdings(holdings):
 
 import requests
 from config import BASE_URL
-
 def get_market_data(symbol):
-    url = f"{BASE_URL}/public/get-ticker"
     try:
-        response = requests.get(url, params={"instrument_name": symbol})
-        data = response.json()
+        resp = requests.get(f"{BASE_URL}/public/get-ticker", params={"instrument_name": symbol})
+        data = resp.json()
+
+        if data.get("code") != 0:
+            raise Exception(f"Market API Error: {data.get('message', 'Unknown error')}")
+
+        ticker = data.get("result", {}).get("data")
+        if not isinstance(ticker, dict):
+            raise TypeError("Ticker 返回数据类型异常，预期为 dict")
+
+        return {
+            "price": float(ticker.get("a", 0))
+        }
+
     except Exception as e:
-        raise Exception(f"网络错误: {e}")
-
-    if data.get("code") != 0:
-        raise Exception(f"Ticker API Error: {data.get('message', 'Unknown error')} (code={data.get('code')})")
-
-    result = data.get("result", {})
-    if not result or "data" not in result:
-        raise Exception("Ticker 返回数据结构异常")
-
-    ticker = result["data"]
-    if not isinstance(ticker, dict):
-        raise Exception("Ticker 返回数据类型异常，预期为 dict")
-
-    # 示例提取字段，可根据需要补充
-    return {
-        "price": ticker.get("a"),  # 最新成交价
-        "high": ticker.get("h"),
-        "low": ticker.get("l"),
-        "volume": ticker.get("v"),
-        "timestamp": ticker.get("t")
-    }
+        raise Exception(f"get_market_data 处理异常：{e}")
