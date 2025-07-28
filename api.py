@@ -86,20 +86,20 @@ def filter_valid_holdings(holdings):
 import requests
 from config import BASE_URL
 def get_market_data(symbol):
+    # symbol 例如 BTC_USDT
     try:
         resp = requests.get(f"{BASE_URL}/public/get-ticker", params={"instrument_name": symbol})
         data = resp.json()
-
-        if data.get("code") != 0:
-            raise Exception(f"Market API Error: {data.get('message', 'Unknown error')}")
-
-        ticker = data.get("result", {}).get("data")
-        if not isinstance(ticker, dict):
-            raise TypeError("Ticker 返回数据类型异常，预期为 dict")
-
-        return {
-            "price": float(ticker.get("a", 0))
-        }
-
     except Exception as e:
-        raise Exception(f"get_market_data 处理异常：{e}")
+        raise Exception(f"get_market_data 请求失败: {e}")
+
+    if data.get("code") != 0:
+        raise Exception(f"get_market_data 返回错误：{data.get('message', 'Unknown error')}")
+
+    ticker = data.get("result", {}).get("data")
+    if not isinstance(ticker, dict):
+        raise Exception("get_market_data 处理异常：Ticker 返回数据类型异常，预期为 dict")
+
+    return {
+        "price": float(ticker.get("a", 0))  # ask price
+    }
