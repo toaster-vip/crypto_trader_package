@@ -4,7 +4,7 @@ CONFIG = {
     "BASE_URL": "https://api.crypto.com/v2",
     "SIMULATE": False,  # ⛔ 真实交易模式
     "SERVER_CHAN_KEY": "SCT290772THBFAsWEtLa29M3l98qRSZ1DZ",
-    "SYMBOLS": ["BTC_USDT", "ETH_USDT", "SOL_USDT", "DOGE_USDT"],
+    "SYMBOLS": [],
     "STRATEGY_WEIGHTS": {
         "ma": 0.4,
         "rsi": 0.3,

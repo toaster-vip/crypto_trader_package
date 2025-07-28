@@ -1,14 +1,24 @@
 import traceback
-from config import SUPPORTED_SYMBOLS
+from config import SERVER_CHAN_KEY
 from strategy import calculate_signal
 from trade_manager import execute_trade
-from api import get_market_data
+from api import get_market_data, get_all_symbols
 from notifier import send_wechat_notification
 
 def main():
     print("\033[96m✅ 自动交易脚本已启动\033[0m")
-    symbols = SUPPORTED_SYMBOLS
-    print(f"🎯 本轮检测币种：{symbols}")
+
+    try:
+        symbols = get_all_symbols()
+        if not symbols:
+            raise Exception("获取支持币种失败，或为空")
+
+        print(f"🎯 当前支持的币种：{symbols}")
+    except Exception as e:
+        err = f"无法获取币种列表：{e}"
+        print(f"\033[91m❌ {err}\033[0m")
+        send_wechat_notification("❌ 自动交易异常 - 获取币种失败", str(e))
+        return
 
     for symbol in symbols:
         print(f"\n🔍 处理 {symbol} 中...")
