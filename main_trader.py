@@ -19,7 +19,7 @@ def main():
                 print(f"\033[93m[警告] 无法获取 {symbol} 行情数据，跳过。\033[0m")
                 continue
 
-            signal = calculate_signal(data)
+            signal = calculate_signal(symbol, data)
             print(f"📈 策略信号为：{signal}")
             execute_trade(symbol, signal, data)
 
