@@ -1,102 +1,58 @@
-import time
-import hmac
-import hashlib
-import requests
-import json
-from config import API_KEY, API_SECRET, BASE_URL
-
-def _signed_post(method, params=None):
-    if params is None:
-        params = {}
-
-    req = {
-        "id": int(time.time() * 1000),
-        "method": method,
-        "api_key": API_KEY,
-        "params": params,
-        "nonce": int(time.time() * 1000)
-    }
-
-    param_string = ""
-    for key in sorted(req["params"]):
-        param_string += key + str(req["params"][key])
-
-    to_sign = req["method"] + str(req["id"]) + req["api_key"] + param_string + str(req["nonce"])
-    req["sig"] = hmac.new(
-        API_SECRET.encode(),
-        msg=to_sign.encode(),
-        digestmod=hashlib.sha256
-    ).hexdigest()
-
-    response = requests.post(f"{BASE_URL}/{method}", json=req)
-    data = response.json()
-
-    if data.get("code") != 0:
-        raise Exception(f"API Error: {data.get('message', 'Unknown error')}")
-
-    return data["result"]
-
 def get_account_holdings():
     result = _signed_post("private/get-account-summary")
     balances = result.get("accounts", [])
     holdings = []
 
     for acc in balances:
-        print("🔍 返回账户信息:", acc)  # ✅ 调试用
-        total_balance = acc.get("total_balance")
+        print(f"🔍 返 回 账 户 信 息 : {acc}")
         currency = acc.get("currency")
-
-        if total_balance is not None:
-            try:
-                if float(total_balance) > 0:
-                    holdings.append({
-                        "currency": currency,
-                        "total": float(total_balance)
-                    })
-            except ValueError:
-                print(f"⚠️ 无法解析余额: {total_balance} (币种: {currency})")
-        else:
-            print(f"⚠️ 跳过未含 total_balance 的账户: {acc}")
+        balance = float(acc.get("balance", 0))
+        if balance > 0:
+            holdings.append({
+                "currency": currency,
+                "total": balance
+            })
 
     return holdings
 
-def get_all_symbols():
-    result = _signed_post("private/get-account-summary")
-    balances = result.get("accounts", [])
-    usdt_symbols = []
-
-    for acc in balances:
-        symbol = f"{acc['currency']}_USDT"
-        usdt_symbols.append(acc["currency"])
-
-    return list(set(usdt_symbols))
-
-_supported_symbols_cache = None  # 全局缓存
-
-def get_market_data(symbol):
-    global _supported_symbols_cache
-
-    if _supported_symbols_cache is None:
-        # 获取所有支持的交易对
-        resp = requests.get(f"{BASE_URL}/public/get-instruments", params={"instrument_type": "SPOT"})
-        data = resp.json()
-
-        if data.get("code") != 0:
-            raise Exception(f"Instrument List Error: {data.get('message', 'Unknown error')}")
-
-        _supported_symbols_cache = set(item["instrument_name"] for item in data["result"]["instruments"])
-
-    if symbol not in _supported_symbols_cache:
-        raise Exception("Market API Error: Unsupported instrument exchange")
-
-    # 真正拉行情
-    resp = requests.get(f"{BASE_URL}/public/get-ticker", params={"instrument_name": symbol})
-    data = resp.json()
+def get_supported_symbols():
+    url = f"{BASE_URL}/public/get-instruments"
+    try:
+        response = requests.get(url, params={"instrument_type": "SPOT"})
+        data = response.json()
+    except Exception as e:
+        print(f"❌ 获取币种列表失败（网络或解析错误）：{e}")
+        return set()
 
     if data.get("code") != 0:
-        raise Exception(f"Market API Error: {data.get('message', 'Unknown error')}")
+        print(f"❌ 获取币种列表失败：{data.get('message', 'Unknown error')} (code={data.get('code')})")
+        return set()
 
-    ticker = data["result"]["data"]
-    return {
-        "price": float(ticker["a"])
-    }
+    instruments = data.get("result", {}).get("instruments", [])
+    usdt_pairs = set()
+
+    for item in instruments:
+        try:
+            if item.get("quote_currency") == "USDT":
+                usdt_pairs.add(item["instrument_name"])
+        except:
+            continue
+
+    print(f"✅ 共识别 {len(usdt_pairs)} 个支持 USDT 的币种交易对")
+    return usdt_pairs
+    
+def filter_valid_holdings(holdings):
+    valid_symbols = get_supported_symbols()
+    filtered = []
+
+    for h in holdings:
+        symbol = f"{h['currency']}_USDT"
+        if symbol in valid_symbols:
+            filtered.append({
+                "symbol": symbol,
+                "amount": h["total"]
+            })
+        else:
+            print(f"⚠️ 跳 过 不 支 持 的 币 种: {h['currency']}")
+
+    return filtered

@@ -78,7 +78,8 @@ def execute_trade(symbol, signal, data):
 
 def main():
     print("✅ 自动交易脚本已启动")
-    holdings = get_account_holdings()
+    raw_holdings = get_account_holdings()
+    holdings = filter_valid_holdings(raw_holdings)
     market_symbols = get_all_symbols()
 
     if not market_symbols:
