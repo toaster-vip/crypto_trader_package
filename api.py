@@ -30,17 +30,34 @@ def get_market_data(symbol: str):
     except Exception:
         return {}
 def get_all_symbols():
-    url = f"{BASE_URL}/public/get-instruments"
+    """
+    从账户余额中提取所有有资产或可交易的币种列表
+    """
     try:
-        payload = {"instrument_type": "SPOT"}
-        resp = requests.post(url, json=payload)
+        url = f"{BASE_URL}/private/get-account-summary"
+        params = {
+            "api_key": API_KEY,
+            "req_time": int(time.time() * 1000),
+        }
+        param_str = urlencode(sorted(params.items()))
+        to_sign = f"{param_str}"
+        sign = hmac.new(
+            bytes(API_SECRET.encode('utf-8')),
+            msg=bytes(to_sign.encode('utf-8')),
+            digestmod=hashlib.sha256
+        ).hexdigest()
+        params["sig"] = sign
+
+        resp = requests.post(url, json=params)
         result = resp.json()
+
         symbols = []
-        for item in result.get("result", {}).get("instruments", []):
-            if item["quote_currency"] == "USDT" and item["instrument_name"].endswith("USDT"):
-                base = item["base_currency"]
-                if base.isalpha() and len(base) <= 10:
-                    symbols.append(base)
+        for asset in result.get("result", {}).get("accounts", []):
+            currency = asset.get("currency")
+            total = float(asset.get("available", 0)) + float(asset.get("balance", 0))
+            if total > 0 or currency in ["USDT", "USDC"]:  # 保留可用资金币种
+                symbols.append(currency)
+
         return sorted(list(set(symbols)))
     except Exception as e:
         print("[ERROR] 获取币种失败：", e)
