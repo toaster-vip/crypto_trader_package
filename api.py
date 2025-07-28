@@ -5,7 +5,6 @@ import requests
 import json
 from config import API_KEY, API_SECRET, BASE_URL
 
-# ✅ 签名并发起 POST 请求
 def _signed_post(method, params=None):
     if params is None:
         params = {}
@@ -37,14 +36,13 @@ def _signed_post(method, params=None):
 
     return data["result"]
 
-# ✅ 获取账户真实持仓
 def get_account_holdings():
     result = _signed_post("private/get-account-summary")
     balances = result.get("accounts", [])
     holdings = []
 
     for acc in balances:
-        print(f"\033[36m🔍 返 回 账 户 信 息 : {acc}\033[0m")
+        print(f"🔍 返 回 账 户 信 息 : {acc}")
         currency = acc.get("currency")
         balance = float(acc.get("balance", 0))
         if balance > 0:
@@ -55,34 +53,20 @@ def get_account_holdings():
 
     return holdings
 
-# ✅ 获取所有支持 USDT 交易对
 def get_supported_symbols():
-    url = f"{BASE_URL}/public/get-instruments"
-    try:
-        response = requests.get(url, params={"instrument_type": "SPOT"})
-        data = response.json()
-    except Exception as e:
-        print(f"\033[91m❌ 获取币种列表失败（网络或解析错误）：{e}\033[0m")
-        return set()
+    # ⚠️ 临时硬编码支持的交易对，避免 public 接口失败造成中断
+    print("⚠️ 使用硬编码支持交易对（临时解决方案）")
+    return {
+        "BTC_USDT",
+        "ETH_USDT",
+        "SOL_USDT",
+        "DOGE_USDT",
+        "SHIB_USDT",
+        "CRO_USDT",
+        "BOME_USDT",
+        "TRUMP_USDT",
+    }
 
-    if data.get("code") != 0:
-        print(f"\033[91m❌ 获取币种列表失败：{data.get('message', 'Unknown error')} (code={data.get('code')})\033[0m")
-        return set()
-
-    instruments = data.get("result", {}).get("instruments", [])
-    usdt_pairs = set()
-
-    for item in instruments:
-        try:
-            if item.get("quote_currency") == "USDT":
-                usdt_pairs.add(item["instrument_name"])
-        except:
-            continue
-
-    print(f"\033[32m✅ 共识别 {len(usdt_pairs)} 个支持 USDT 的币种交易对\033[0m")
-    return usdt_pairs
-
-# ✅ 从持仓中筛选出可交易币种
 def filter_valid_holdings(holdings):
     valid_symbols = get_supported_symbols()
     filtered = []
@@ -95,17 +79,16 @@ def filter_valid_holdings(holdings):
                 "amount": h["total"]
             })
         else:
-            print(f"\033[90m⚠️ 跳 过 不 支 持 的 币 种: {h['currency']}\033[0m")
+            print(f"⚠️ 跳 过 不 支 持 的 币 种: {h['currency']}")
 
     return filtered
 
-# ✅ 获取市场行情
 def get_market_data(symbol):
     try:
         resp = requests.get(f"{BASE_URL}/public/get-ticker", params={"instrument_name": symbol})
         data = resp.json()
     except Exception as e:
-        raise Exception(f"Market API Request Error: {e}")
+        raise Exception(f"网络请求失败：{e}")
 
     if data.get("code") != 0:
         raise Exception(f"Market API Error: {data.get('message', 'Unknown error')}")
