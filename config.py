@@ -1,6 +1,6 @@
 CONFIG = {
-    "API_KEY": "YVzxNDmnAR7so8EjrW33yK",
-    "API_SECRET": "cxakp_EcuTu92ZQbMxmmqNKhBDj6",
+    "API_KEY": "s7GzS87EZgTjSzgjG71fQo",
+    "API_SECRET": "cxakp_wZMVxFLmonyfWar4HhVy7f",
     "BASE_URL": "https://api.crypto.com/v2",
     "SIMULATE": False,  # ⛔ 真实交易模式
     "SERVER_CHAN_KEY": "SCT290772THBFAsWEtLa29M3l98qRSZ1DZ",
