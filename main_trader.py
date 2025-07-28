@@ -1,22 +1,5 @@
 from config import SUPPORTED_SYMBOLS, IS_REAL_TRADING
 from api import get_account_holdings, get_all_symbols, get_market
-
-以下是你请求的自动交易系统核心执行逻辑：`main_trader.py` 完整代码，具备以下功能：
-
-- 获取账户真实持仓（非硬编码）；
-- 获取交易所支持的所有币种；
-- 对所有币种做高级策略打分（MACD、RSI、均线）；
-- 对无潜力币种自动卖出；
-- 从潜力币种中择优买入（排除已有持仓）；
-- 支持止盈/止损；
-- Server酱通知仅在买入、卖出或异常时触发；
-- 所有变量名与 `config.py` 完全兼容，不修改结构。
-
----
-
-### ✅ `main_trader.py`（覆盖粘贴到 WC）：
-
-```python
 import time
 from datetime import datetime
 from config import (
