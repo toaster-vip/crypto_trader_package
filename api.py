@@ -40,12 +40,24 @@ def get_account_holdings():
     result = _signed_post("private/get-account-summary")
     balances = result.get("accounts", [])
     holdings = []
+
     for acc in balances:
-        if float(acc["total_balance"]) > 0:
-            holdings.append({
-                "currency": acc["currency"],
-                "total": float(acc["total_balance"])
-            })
+        print("🔍 返回账户信息:", acc)  # ✅ 调试用
+        total_balance = acc.get("total_balance")
+        currency = acc.get("currency")
+
+        if total_balance is not None:
+            try:
+                if float(total_balance) > 0:
+                    holdings.append({
+                        "currency": currency,
+                        "total": float(total_balance)
+                    })
+            except ValueError:
+                print(f"⚠️ 无法解析余额: {total_balance} (币种: {currency})")
+        else:
+            print(f"⚠️ 跳过未含 total_balance 的账户: {acc}")
+
     return holdings
 
 def get_all_symbols():
