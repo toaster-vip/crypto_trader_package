@@ -31,10 +31,9 @@ def get_market_data(symbol: str):
         return {}
 
 def get_all_symbols():
-    url = f"{BASE_URL}/public/get-instruments"
-    payload = {"instrument_type": "SPOT"}
+    url = f"{BASE_URL}/public/get-instruments?instrument_type=SPOT"
     try:
-        resp = requests.post(url, json=payload)
+        resp = requests.get(url)
         result = resp.json()
         symbols = []
         for item in result.get("result", {}).get("instruments", []):
