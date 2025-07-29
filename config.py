@@ -1,46 +1,35 @@
+# save1/config.py
+
 CONFIG = {
-    "API_KEY": "s7GzS87EZgTjSzgjG71fQo",  # ✅ 你的真实 API Key
-    "API_SECRET": "cxakp_wZMVxFLmonyfWar4HhVy7f",  # ✅ 你的真实 API Secret
-   # "BASE_URL": "https://api.crypto.com/v2",  # ✅ Crypto.com Exchange API（正式交易用）
-    "BASE_URL": "https://api.crypto.com/exchange/v1/",
+    "KUCOIN_API_KEY": "644af066dbf5e20001001f20",
+    "KUCOIN_API_SECRET": "1d57e017-1d91-44e4-bd2f-7c9e77f72700",
+    "KUCOIN_API_PASSPHRASE": "ilovesophia",
 
-    "SIMULATE": False,  # ⛔ 已启用真实交易模式（False 为真实，True 为模拟）
+    "SIMULATE": False,  # ✅ 真实交易已启用
+    "SERVER_CHAN_KEY": "SCT290772THBFAsWEtLa29M3l98qRSZ1DZ",
 
-    "SERVER_CHAN_KEY": "SCT290772THBFAsWEtLa29M3l98qRSZ1DZ",  # ✅ Server酱通知推送
-
-    # 若为空则系统自动识别持仓币种并轮动交易
-    "SYMBOLS": [],
-
-    # 策略权重分配：总和为 1.0
-    "STRATEGY_WEIGHTS": {
-        "ma": 0.4,
-        "rsi": 0.3,
-        "macd": 0.3
+    "TRADE": {
+        "TAKE_PROFIT": 0.045,
+        "STOP_LOSS": -0.025
     },
 
-    # 策略打分阈值
-    "THRESHOLDS": {
-        "buy": 0.2,   # >0.2 执行买入
-        "sell": -0.2  # <-0.2 执行卖出
+    "STRATEGY": {
+        "MACD_WEIGHT": 0.3,
+        "RSI_WEIGHT": 0.2,
+        "SMA_WEIGHT": 0.2,
+        "MOMENTUM_WEIGHT": 0.2,
+        "TREND_WEIGHT": 0.1
     },
 
-    # 止盈/止损参数
-    "TAKE_PROFIT": 0.045,   # ✅ +4.5% 止盈
-    "STOP_LOSS": -0.025     # ✅ -2.5% 止损
+    "LOG_DIR": "/home/linuxuser/trade_logs/"
 }
 
-# ✅ 以下为兼容其他模块的全局变量映射（不建议改名）
-API_KEY = CONFIG["API_KEY"]
-API_SECRET = CONFIG["API_SECRET"]
-BASE_URL = CONFIG["BASE_URL"]
-IS_REAL_TRADING = not CONFIG["SIMULATE"]
+# 保持兼容性（旧模块使用）
+KUCOIN_API_KEY = CONFIG["KUCOIN_API_KEY"]
+KUCOIN_API_SECRET = CONFIG["KUCOIN_API_SECRET"]
+KUCOIN_API_PASSPHRASE = CONFIG["KUCOIN_API_PASSPHRASE"]
+SIMULATE = CONFIG["SIMULATE"]
 SERVER_CHAN_KEY = CONFIG["SERVER_CHAN_KEY"]
-SUPPORTED_SYMBOLS = [s.split("_")[0] for s in CONFIG["SYMBOLS"]]
-STRATEGY_WEIGHTS = CONFIG["STRATEGY_WEIGHTS"]
-THRESHOLDS = CONFIG["THRESHOLDS"]
-TAKE_PROFIT = CONFIG["TAKE_PROFIT"]
-STOP_LOSS = CONFIG["STOP_LOSS"]
-SIMULATION_MODE = CONFIG["SIMULATE"]
-
-# ✅ 新增字段：日志保存目录
-LOG_DIR = "/home/linuxuser/trade_logs/"
+TRADE = CONFIG["TRADE"]
+STRATEGY = CONFIG["STRATEGY"]
+LOG_DIR = CONFIG["LOG_DIR"]
