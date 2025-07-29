@@ -1,50 +1,34 @@
-import time
-import hmac
-import hashlib
+import time, hmac, hashlib, json
 import requests
-import json
 
-API_KEY = "s7GzS87EZgTjSzgjG71fQo"
-API_SECRET = "cxakp_wZMVxFLmonyfWar4HhVy7f"
+API_KEY = "WpWVkahrWSCaJfcmvcJgSv"
+API_SECRET = "cxakp_FDRiZ8aw9UPogTVTgzzJGv"
 BASE_URL = "https://api.crypto.com/v2"
 
-def generate_signature(api_key, api_secret, method, params, nonce):
-    param_str = ''
-    if params:
-        param_str = ''.join(f"{key}{params[key]}" for key in sorted(params))
-    sig_payload = method + str(nonce) + api_key + param_str
-    signature = hmac.new(
-        bytes(api_secret, 'utf-8'),
-        msg=bytes(sig_payload, 'utf-8'),
+def generate_signature(api_key, method, params, nonce, api_secret):
+    payload = {
+        "id": 11,
+        "method": method,
+        "api_key": api_key,
+        "params": params,
+        "nonce": nonce
+    }
+    param_str = json.dumps(payload, separators=(',', ':'), sort_keys=True)
+    sig = hmac.new(
+        api_secret.encode(), 
+        msg=param_str.encode(), 
         digestmod=hashlib.sha256
     ).hexdigest()
-    return signature
+    payload["sig"] = sig
+    return payload
 
-def private_request(method, params=None):
-    url = f"{BASE_URL}/{method}"
-    nonce = int(time.time() * 1000)
-    body = {
-        "id": nonce,
-        "method": method,
-        "api_key": API_KEY,
-        "nonce": nonce,
-        "params": params or {}
-    }
-    sig = generate_signature(API_KEY, API_SECRET, method, body["params"], nonce)
-    body["sig"] = sig
+# 调用 private/get-account-summary
+nonce = int(time.time() * 1000)
+method = "private/get-account-summary"
+params = {}
 
-    headers = {"Content-Type": "application/json"}
-    response = requests.post(url, headers=headers, data=json.dumps(body))
+signed_payload = generate_signature(API_KEY, method, params, nonce, API_SECRET)
 
-    try:
-        res = response.json()
-        print(f"\n📡 请求成功: {method}")
-        print(json.dumps(res, indent=2))
-    except Exception as e:
-        print(f"\n❌ 请求失败: {method}")
-        print(f"HTTP Status: {response.status_code}")
-        print(response.text)
-
-# 测试调用
-if __name__ == "__main__":
-    private_request("private/get-account-summary")
+response = requests.post(f"{BASE_URL}/{method}", json=signed_payload)
+print("状态码：", response.status_code)
+print("响应：", response.json())
