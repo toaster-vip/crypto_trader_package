@@ -1,7 +1,8 @@
 CONFIG = {
     "API_KEY": "s7GzS87EZgTjSzgjG71fQo",  # ✅ 你的真实 API Key
     "API_SECRET": "cxakp_wZMVxFLmonyfWar4HhVy7f",  # ✅ 你的真实 API Secret
-    "BASE_URL": "https://api.crypto.com/v2",  # ✅ Crypto.com Exchange API（正式交易用）
+   # "BASE_URL": "https://api.crypto.com/v2",  # ✅ Crypto.com Exchange API（正式交易用）
+    "BASE_URL": "https://api.crypto.com/exchange/v1/",
 
     "SIMULATE": False,  # ⛔ 已启用真实交易模式（False 为真实，True 为模拟）
 
