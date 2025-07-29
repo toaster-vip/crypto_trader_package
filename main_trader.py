@@ -1,69 +1,53 @@
 # main_trader.py
 import os
-import sys
-import logging
 import datetime
-from config import LOG_DIR, CONFIG
-from api import client
-from analyzer import analyze_all_symbols
+from kucoin_api import KuCoinClient
+from strategy import analyze_symbol
 from rebalancer import rebalance_portfolio
+from notifier import send_serverchan_notification
+from config import CONFIG, LOG_DIR
 
-# ✅ 设置日志
-if not os.path.exists(LOG_DIR):
-    os.makedirs(LOG_DIR)
+from colorama import Fore, Style, init as colorama_init
+colorama_init(autoreset=True)
 
-today = datetime.datetime.now().strftime("%Y-%m-%d")
-log_path = os.path.join(LOG_DIR, f"trade_{today}.log")
+def log(message):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"{Fore.CYAN}[{timestamp}] {message}{Style.RESET_ALL}")
+    with open(os.path.join(LOG_DIR, "trading.log"), "a") as f:
+        f.write(f"[{timestamp}] {message}\n")
 
-logging.basicConfig(
-    filename=log_path,
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+def main():
+    log("📈 自动交易脚本开始执行")
+    client = KuCoinClient()
 
-def log(msg):
-    print(msg)
-    logging.info(msg)
+    holdings = client.get_account_holdings()
+    log(f"✅ 当前持仓币种: {list(holdings.keys())}")
 
-def run():
-    log("✅ 自动交易系统启动中...")
+    supported_symbols = client.get_supported_symbols()
+    usdt_symbols = [s for s in supported_symbols if s.endswith("USDT")]
 
-    # 1. 获取推荐币种（按评分排序）
-    try:
-        symbols_to_analyze = CONFIG.get("SYMBOLS", [])
-        if not symbols_to_analyze:
-            try:
-                symbols_to_analyze = client.get_valid_symbols()
-            except Exception as e:
-                log(f"[WARN] 获取支持币种失败：{e}")
-                symbols_to_analyze = []
+    scores = {}
+    for symbol in usdt_symbols:
+        base = symbol.replace("-USDT", "").replace("USDT", "")
+        market_data = client.get_market_data(symbol)
+        if not market_data:
+            continue
+        score = analyze_symbol(base, market_data)
+        scores[symbol] = score
+        print(f"{Fore.YELLOW}{symbol:<12} Score: {score:.3f}{Style.RESET_ALL}")
 
-        # 调用分析函数
-        recommended = analyze_all_symbols(client, symbols_to_analyze)
-    except Exception as e:
-        log(f"[ERROR] 分析失败: {e}")
+    if not scores:
+        log("⚠️ 没有可用的评分结果，跳过交易。")
         return
 
-    if not recommended:
-        log("⚠️ 没有发现任何潜力币种，跳过本轮。")
-        return
+    # 排序并选出潜力币种
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    top_symbols = [s[0] for s in sorted_scores[:3]]
+    log(f"🔥 评分最高币种: {top_symbols}")
 
-    # 2. 执行调仓逻辑
-    try:
-        top_symbols = recommended  # ✅ 修复：recommended 本身是一个符号列表
-        log(f"📊 本轮推荐币种：{top_symbols}")
-        rebalance_portfolio(top_symbols)
-    except Exception as e:
-        log(f"[ERROR] 调仓失败: {e}")
-        return
+    rebalance_portfolio(client, holdings, top_symbols)
 
-    log("✅ 本轮交易完成。")
+    log("✅ 本轮交易执行完毕")
 
 if __name__ == "__main__":
-    try:
-        run()
-    except Exception as e:
-        logging.exception(f"系统运行异常: {e}")
-        print(f"\033[91m[致命错误] 系统崩溃: {e}\033[0m")
-        sys.exit(1)
+    main()
