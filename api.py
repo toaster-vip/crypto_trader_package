@@ -1,4 +1,3 @@
-# api.py
 import time
 import hmac
 import hashlib
@@ -52,6 +51,19 @@ class CryptoComExchangeClient:
     def get_account_summary(self):
         return self.send_request("private/get-account-summary")
 
+    def get_currency_balance(self, currency="USDT"):
+        """
+        获取指定币种的可用余额（用于买入）
+        """
+        result = self.get_account_summary()
+        if not result:
+            return 0.0
+        accounts = result.get("accounts", [])
+        for acc in accounts:
+            if acc.get("currency", "").upper() == currency.upper():
+                return float(acc.get("available", 0))
+        return 0.0
+
     def get_open_orders(self, symbol):
         return self.send_request("private/get-open-orders", {"instrument_name": symbol})
 
@@ -73,11 +85,17 @@ class CryptoComExchangeClient:
         return self.send_request("private/cancel-order", {"order_id": order_id})
 
     def get_symbol_price(self, symbol):
+        """
+        获取交易对的最新买一价
+        """
         try:
             resp = requests.get(f"{self.base_url}/public/get-ticker", params={"instrument_name": symbol})
             resp.raise_for_status()
             data = resp.json()
-            return float(data["result"]["data"]["a"])  # 最新买一价
+            ticker = data.get("result", {}).get("data")
+            if not ticker or "a" not in ticker:
+                raise ValueError(f"响应结构异常: {data}")
+            return float(ticker["a"])
         except Exception as e:
             print(f"[ERROR] 获取 {symbol} 价格失败: {e}")
             return None
@@ -90,10 +108,10 @@ class CryptoComExchangeClient:
         except Exception as e:
             print(f"[ERROR] 获取交易对失败: {e}")
             return []
-        
+
     def get_valid_symbols(self):
         """
-        获取支持的交易对（App API 不支持 /get-instruments 时使用 fallback）
+        获取所有可交易币种
         """
         try:
             response = requests.get(f"{self.base_url}/public/get-instruments")
@@ -105,7 +123,7 @@ class CryptoComExchangeClient:
             return [
                 "BOME_USDT", "SHIB_USDT", "TRUMP_USDT",
                 "DOGE_USDT", "BTC_USDT", "ETH_USDT", "CRO_USDT"
-            ] 
+            ]
 
     def get_account_holdings(self):
         result = self.get_account_summary()
@@ -119,9 +137,10 @@ class CryptoComExchangeClient:
         ]
 
 
-# 初始化客户端对象供其他模块调用
+# ✅ 初始化 client 实例供外部调用
 client = CryptoComExchangeClient(API_KEY, API_SECRET)
 
+# ✅ 外部函数兼容旧模块
 def get_symbol_price(symbol):
     return client.get_symbol_price(symbol)
 
