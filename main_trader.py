@@ -51,7 +51,7 @@ def run():
 
     # 2. 执行调仓逻辑
     try:
-        top_symbols = [item["symbol"] for item in recommended]
+        top_symbols = recommended  # ✅ 修复：recommended 本身是一个符号列表
         log(f"📊 本轮推荐币种：{top_symbols}")
         rebalance_portfolio(top_symbols)
     except Exception as e:
