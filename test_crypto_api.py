@@ -1,69 +1,41 @@
-import requests
-import json
-import time
-import hmac
-import hashlib
+import requests, time, hmac, hashlib
 
-class CryptoComExchangeClient:
-    def __init__(self, api_key, api_secret):
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.base_url = "https://api.crypto.com/v2"
+API_KEY = "s7GzS87EZgTjSzgjG71fQo"  # ✅ 替换为你从 Exchange 获得的
+API_SECRET = "cxakp_wZMVxFLmonyfWar4HhVy7f"
+BASE_URL = "https://api.crypto.com/v2"
 
-    def sign_request(self, req):
-        param_string = ""
-        if "params" in req:
-            for key in sorted(req['params']):
-                param_string += key
-                param_string += str(req['params'][key])
+def get_account_summary():
+    method = "private/get-account-summary"
+    req_id = int(time.time() * 100)
+    nonce = int(time.time() * 1000)
 
-        sig_payload = req['method'] + str(req['id']) + self.api_key + param_string + str(req['nonce'])
+    req = {
+        "id": req_id,
+        "method": method,
+        "api_key": API_KEY,
+        "params": {},
+        "nonce": nonce
+    }
 
-        req['sig'] = hmac.new(
-            bytes(self.api_secret, 'utf-8'),
-            msg=bytes(sig_payload, 'utf-8'),
-            digestmod=hashlib.sha256
-        ).hexdigest()
-        return req
+    param_string = ""
+    for key in sorted(req["params"]):
+        param_string += key + str(req["params"][key])
 
-    def get_account_summary(self):
-        method = "private/get-account-summary"
-        req = {
-            "id": int(time.time() * 100),
-            "method": method,
-            "api_key": self.api_key,
-            "params": {},
-            "nonce": int(time.time() * 1000)
-        }
+    sig_payload = method + str(req_id) + API_KEY + param_string + str(nonce)
+    signature = hmac.new(
+        API_SECRET.encode(),
+        msg=sig_payload.encode(),
+        digestmod=hashlib.sha256
+    ).hexdigest()
+    req["sig"] = signature
 
-        signed_req = self.sign_request(req)
+    try:
+        response = requests.post(f"{BASE_URL}/{method}", json=req)
+        response.raise_for_status()
+        print("✅ 响应：", response.json())
+    except requests.exceptions.RequestException as e:
+        print("❌ 请求失败:", e)
+        if e.response is not None:
+            print("错误响应:", e.response.text)
 
-        try:
-            response = requests.post(
-                f"{self.base_url}/{method}",
-                json=signed_req,
-                headers={'Content-Type': 'application/json'}
-            )
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            print(f"❌ 请求失败: {e}")
-            if e.response is not None:
-                print(f"错误响应: {e.response.text}")
-            return None
-
-        return response.json()
-
-# ======== 实际运行测试 ========
-if __name__ == "__main__":
-    # 请用你的真实 API_KEY 和 API_SECRET 替换以下内容
-    API_KEY = "WpWVkahrWSCaJfcmvcJgSv"
-    API_SECRET = "cxakp_FDRiZ8aw9UPogTVTgzzJGv"
-
-    client = CryptoComExchangeClient(api_key=API_KEY, api_secret=API_SECRET)
-    result = client.get_account_summary()
-
-    if result:
-        print("✅ 成功获取账户信息：")
-        print(json.dumps(result, indent=4, ensure_ascii=False))
-    else:
-        print("⚠️ 获取失败")
+get_account_summary()
