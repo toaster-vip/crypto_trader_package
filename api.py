@@ -1,106 +1,130 @@
+# api.py
 import time
 import hmac
 import hashlib
 import requests
 import json
+
 from config import API_KEY, API_SECRET, BASE_URL
 
-def _signed_post(method, params=None):
-    if params is None:
-        params = {}
 
-    req = {
-        "id": int(time.time() * 1000),
-        "method": method,
-        "api_key": API_KEY,
-        "params": params,
-        "nonce": int(time.time() * 1000)
-    }
+class CryptoComExchangeClient:
+    def __init__(self, api_key, api_secret, base_url=BASE_URL):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.base_url = base_url
 
-    param_string = ""
-    for key in sorted(req["params"]):
-        param_string += key + str(req["params"][key])
+    def sign_request(self, req):
+        param_string = ""
+        if "params" in req:
+            for key in sorted(req['params']):
+                param_string += key
+                param_string += str(req['params'][key])
+        sig_payload = req['method'] + str(req['id']) + self.api_key + param_string + str(req['nonce'])
+        req['sig'] = hmac.new(
+            bytes(self.api_secret, 'utf-8'),
+            msg=bytes(sig_payload, 'utf-8'),
+            digestmod=hashlib.sha256
+        ).hexdigest()
+        return req
 
-    to_sign = req["method"] + str(req["id"]) + req["api_key"] + param_string + str(req["nonce"])
-    req["sig"] = hmac.new(
-        API_SECRET.encode(),
-        msg=to_sign.encode(),
-        digestmod=hashlib.sha256
-    ).hexdigest()
+    def send_request(self, method, params=None):
+        req = {
+            "id": int(time.time() * 1000),
+            "method": method,
+            "api_key": self.api_key,
+            "params": params or {},
+            "nonce": int(time.time() * 1000)
+        }
+        signed = self.sign_request(req)
+        try:
+            resp = requests.post(f"{self.base_url}/{method}", json=signed)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("code") != 0:
+                print(f"[ERROR] 接口返回错误: {data}")
+                return None
+            return data.get("result")
+        except Exception as e:
+            print(f"[EXCEPTION] 请求失败: {e}")
+            return None
 
-    response = requests.post(f"{BASE_URL}/{method}", json=req)
-    data = response.json()
+    def get_account_summary(self):
+        return self.send_request("private/get-account-summary")
 
-    if data.get("code") != 0:
-        raise Exception(f"API Error: {data.get('message', 'Unknown error')}")
+    def get_open_orders(self, symbol):
+        return self.send_request("private/get-open-orders", {"instrument_name": symbol})
 
-    return data["result"]
+    def create_order(self, symbol, side, price, quantity):
+        """
+        下单（真实）
+        """
+        params = {
+            "instrument_name": symbol,
+            "side": side.upper(),  # BUY or SELL
+            "type": "LIMIT",
+            "price": str(price),
+            "quantity": str(quantity),
+            "client_oid": f"oid_{int(time.time() * 1000)}"
+        }
+        return self.send_request("private/create-order", params)
+
+    def cancel_order(self, order_id):
+        return self.send_request("private/cancel-order", {"order_id": order_id})
+
+    def get_symbol_price(self, symbol):
+        try:
+            resp = requests.get(f"{self.base_url}/public/get-ticker", params={"instrument_name": symbol})
+            resp.raise_for_status()
+            data = resp.json()
+            return float(data["result"]["data"]["a"])  # 最新买一价
+        except Exception as e:
+            print(f"[ERROR] 获取 {symbol} 价格失败: {e}")
+            return None
+
+    def get_all_instruments(self):
+        try:
+            resp = requests.get(f"{self.base_url}/public/get-instruments")
+            resp.raise_for_status()
+            return resp.json().get("result", {}).get("instruments", [])
+        except Exception as e:
+            print(f"[ERROR] 获取交易对失败: {e}")
+            return []
+
+    def get_valid_symbols(self, quote_currency="USDT"):
+        """
+        返回支持 USDT 交易的币种对列表（如 BTC_USDT）
+        """
+        instruments = self.get_all_instruments()
+        return [
+            i["instrument_name"]
+            for i in instruments
+            if i.get("quote_currency") == quote_currency and i.get("instrument_type") == "SPOT"
+        ]
+
+    def get_account_holdings(self):
+        result = self.get_account_summary()
+        if not result:
+            return []
+        accounts = result.get("accounts", [])
+        return [
+            {"symbol": acc["currency"], "balance": float(acc["balance"])}
+            for acc in accounts
+            if float(acc.get("balance", 0)) > 0
+        ]
+
+
+# 初始化客户端对象供其他模块调用
+client = CryptoComExchangeClient(API_KEY, API_SECRET)
+
+def get_symbol_price(symbol):
+    return client.get_symbol_price(symbol)
 
 def get_account_holdings():
-    result = _signed_post("private/get-account-summary")
-    balances = result.get("accounts", [])
-    holdings = []
+    return client.get_account_holdings()
 
-    for acc in balances:
-        print(f"🔍 返 回 账 户 信 息 : {acc}")
-        currency = acc.get("currency")
-        balance = float(acc.get("balance", 0))
-        if balance > 0:
-            holdings.append({
-                "currency": currency,
-                "total": balance
-            })
+def get_valid_symbols():
+    return client.get_valid_symbols()
 
-    return holdings
-
-def get_supported_symbols():
-    # ⚠️ 临时硬编码支持的交易对，避免 public 接口失败造成中断
-    print("⚠️ 使用硬编码支持交易对（临时解决方案）")
-    return {
-        "BTC_USDT",
-        "ETH_USDT",
-        "SOL_USDT",
-        "DOGE_USDT",
-        "SHIB_USDT",
-        "CRO_USDT",
-        "BOME_USDT",
-        "TRUMP_USDT",
-    }
-
-def filter_valid_holdings(holdings):
-    valid_symbols = get_supported_symbols()
-    filtered = []
-
-    for h in holdings:
-        symbol = f"{h['currency']}_USDT"
-        if symbol in valid_symbols:
-            filtered.append({
-                "symbol": symbol,
-                "amount": h["total"]
-            })
-        else:
-            print(f"⚠️ 跳 过 不 支 持 的 币 种: {h['currency']}")
-
-    return filtered
-
-import requests
-from config import BASE_URL
-def get_market_data(symbol):
-    # symbol 例如 BTC_USDT
-    try:
-        resp = requests.get(f"{BASE_URL}/public/get-ticker", params={"instrument_name": symbol})
-        data = resp.json()
-    except Exception as e:
-        raise Exception(f"get_market_data 请求失败: {e}")
-
-    if data.get("code") != 0:
-        raise Exception(f"get_market_data 返回错误：{data.get('message', 'Unknown error')}")
-
-    ticker_list = data.get("result", {}).get("data", [])
-    if not isinstance(ticker_list, list) or not ticker_list:
-        raise Exception("get_market_data 处理异常：Ticker 返回数据为空或非列表")
-
-    ticker = ticker_list[0]  # 取第一个数据项
-    return {
-        "price": float(ticker.get("a", 0))  # ask price
-    }
+def place_order(symbol, side, price, quantity):
+    return client.create_order(symbol, side, price, quantity)

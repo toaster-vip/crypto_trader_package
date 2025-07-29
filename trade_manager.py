@@ -1,71 +1,80 @@
+# trade_manager.py
+import os
 from datetime import datetime
-from config import IS_REAL_TRADING, TAKE_PROFIT, STOP_LOSS
-from notifier import send_wechat_notification
+from config import TAKE_PROFIT, STOP_LOSS, IS_REAL_TRADING, LOG_DIR, SERVER_CHAN_KEY
+from api import client
+from notifier import send_wechat_message
+from strategy import get_symbol_score
 
-# 用于模拟交易记录（如使用真实交易，可改为实际订单系统）
-portfolio = {}
+entry_prices = {}  # 内存持仓价格缓存
 
-def execute_trade(symbol, signal, data):
-    price = float(data["price"]) if "price" in data else None
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def get_entry_price(symbol):
+    return entry_prices.get(symbol)
 
-    if symbol not in portfolio:
-        portfolio[symbol] = {
-            "holding": False,
-            "buy_price": 0.0,
-            "buy_time": "",
-        }
+def update_entry_price(symbol, price):
+    entry_prices[symbol] = price
 
-    position = portfolio[symbol]
+def log(msg, level="INFO"):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{level}] {msg}")
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(os.path.join(LOG_DIR, f"trade_{datetime.now().date()}.log"), "a") as f:
+            f.write(f"[{now}] {level} {msg}\n")
+    except Exception as e:
+        print(f"[ERROR] 写入日志失败: {e}")
 
-    # 买入信号
-    if signal > 0.2 and not position["holding"]:
-        print(f"[BUY] 买入 {symbol} @ {price} at {timestamp}")
-        position["holding"] = True
-        position["buy_price"] = price
-        position["buy_time"] = timestamp
+def check_tp_sl(symbol, current_price):
+    entry = get_entry_price(symbol)
+    if not entry:
+        return None
+    change = (current_price - entry) / entry
+    if change >= TAKE_PROFIT:
+        return "TP"
+    elif change <= STOP_LOSS:
+        return "SL"
+    return None
 
-        if IS_REAL_TRADING:
-            # 真实下单逻辑放这里（调用交易所 API）
-            pass
+def execute_trade(symbol, side, amount):
+    log(f"执行交易：{side} {amount} {symbol}", "TRADE")
+    print_color = "\033[92m" if side == "BUY" else "\033[91m"
+    print(f"{print_color}📈 {side} {amount} {symbol} \033[0m")
 
-        send_wechat_notification(
-            f"💰 成交：买入 {symbol}",
-            f"价格：{price}\n时间：{timestamp}"
-        )
+    if not IS_REAL_TRADING:
+        log(f"🧪 模拟交易：{side} {amount} {symbol}")
+        if side == "BUY":
+            update_entry_price(symbol, client.get_symbol_price(symbol))
+        return
 
-    # 卖出信号
-    elif signal < -0.2 and position["holding"]:
-        print(f"[SELL] 卖出 {symbol} @ {price} at {timestamp}")
-        position["holding"] = False
-        pnl = round((price - position["buy_price"]) / position["buy_price"] * 100, 2)
-
-        if IS_REAL_TRADING:
-            # 真实卖出逻辑放这里
-            pass
-
-        send_wechat_notification(
-            f"💸 成交：卖出 {symbol}",
-            f"价格：{price}\n盈亏：{pnl}%\n时间：{timestamp}"
-        )
-
-    # 止盈止损判断（在持仓状态下）
-    elif position["holding"]:
-        entry = position["buy_price"]
-        change = (price - entry) / entry
-        if change >= TAKE_PROFIT:
-            print(f"[TP] 止盈 {symbol} @ {price} (+{change*100:.2f}%)")
-            position["holding"] = False
-            send_wechat_notification(
-                f"✅ 止盈卖出 {symbol}",
-                f"价格：{price}\n盈利：{change*100:.2f}%\n时间：{timestamp}"
-            )
-        elif change <= -STOP_LOSS:
-            print(f"[SL] 止损 {symbol} @ {price} ({change*100:.2f}%)")
-            position["holding"] = False
-            send_wechat_notification(
-                f"⚠️ 止损卖出 {symbol}",
-                f"价格：{price}\n亏损：{change*100:.2f}%\n时间：{timestamp}"
-            )
+    resp = client.create_order(symbol=symbol, side=side, amount=amount)
+    if resp:
+        price = client.get_symbol_price(symbol)
+        if side == "BUY":
+            update_entry_price(symbol, price)
+        notify_msg = f"✅ 成交：{side} {amount} {symbol} @ {price}"
+        send_wechat_message(notify_msg)
+        log(notify_msg, "SUCCESS")
     else:
-        print(f"[HOLD] 继续观望 {symbol}")
+        msg = f"❌ 下单失败：{side} {amount} {symbol}"
+        send_wechat_message(msg)
+        log(msg, "ERROR")
+
+def maybe_sell_if_tp_sl(symbol):
+    price = client.get_symbol_price(symbol)
+    decision = check_tp_sl(symbol, price)
+    if decision:
+        reason = "止盈" if decision == "TP" else "止损"
+        log(f"⚠️ 触发{reason}，准备卖出：{symbol} 当前价: {price}")
+        execute_trade(symbol, "SELL", amount="ALL")  # 假设为市价全部卖出
+
+def maybe_buy(symbol):
+    score = get_symbol_score(symbol)
+    if score >= 0.7:
+        log(f"👍 策略判断可以买入：{symbol}，评分 {score}")
+        execute_trade(symbol, "BUY", amount=100)  # 示例买入等额
+
+def maybe_sell_due_to_score(symbol):
+    score = get_symbol_score(symbol)
+    if score <= 0.3:
+        log(f"⚠️ 策略评分过低，准备卖出：{symbol}，评分 {score}")
+        execute_trade(symbol, "SELL", amount="ALL")
