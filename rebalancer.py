@@ -1,53 +1,68 @@
 # rebalancer.py
+
+import time
 from api import client
 from strategy import should_sell, check_take_profit_stop_loss
-from notifier import send_notification
-from config import CONFIG
+from notifier import notify
+from config import IS_REAL_TRADING
 
-def rebalance_portfolio(recommended_symbols):
+def rebalance_portfolio(top_candidates, max_holdings=3):
     """
-    执行调仓逻辑：卖出不推荐的币种，买入新推荐的币种
-    recommended_symbols 是推荐的 symbol 字符串列表，例如 ['BTC_USDT', 'ETH_USDT']
+    自动调仓逻辑：
+    1. 获取当前持仓
+    2. 卖出弱币或止盈止损
+    3. 买入推荐币种（未持有的前 N 个）
     """
-    print("🔁 开始执行自动调仓...")
-    holdings = client.get_account_holdings()  # 返回格式 [{'symbol': 'BTC', 'balance': 0.1}, ...]
+    holdings = client.get_account_holdings()  # [{'symbol': 'BOME', 'balance': 123.0}, ...]
+    held_symbols = [h['symbol'] for h in holdings]
 
-    symbols_to_sell = []
-    symbols_to_keep = set(s.split("_")[0] for s in recommended_symbols)  # 只保留币种前缀如 BTC
+    prices = {}
+    for h in holdings:
+        symbol = h['symbol']
+        prices[symbol] = client.get_symbol_price(symbol)
 
-    for asset in holdings:
-        symbol = asset['symbol']
-        balance = asset['balance']
+    # 1️⃣ 处理卖出逻辑
+    for h in holdings:
+        symbol = h['symbol']
+        current_price = prices.get(symbol)
+        if not current_price:
+            print(f"[WARN] 获取 {symbol} 价格失败，跳过卖出判断")
+            continue
 
-        if symbol not in symbols_to_keep:
-            symbols_to_sell.append(symbol)
+        score = client.get_symbol_score(symbol)
+        reason = None
+
+        if should_sell(symbol, score):
+            reason = f"评分过低（{score:.2f}）"
         else:
-            # 止盈止损判断
-            price = client.get_symbol_price(f"{symbol}_USDT")
-            if check_take_profit_stop_loss(symbol, price):
-                symbols_to_sell.append(symbol)
+            reason = check_take_profit_stop_loss(symbol, current_price)
 
-    for symbol in symbols_to_sell:
-        result = client.place_order(symbol=f"{symbol}_USDT", side="SELL", amount="ALL")
-        if result:
-            print(f"🔻 卖出 {symbol}")
-            send_notification(f"已卖出 {symbol}")
-        else:
-            print(f"[ERROR] 卖出 {symbol} 失败")
+        if reason:
+            print(f"\033[91m🔻 卖出信号：{symbol} | 原因：{reason}\033[0m")
+            if IS_REAL_TRADING:
+                client.place_order(symbol, "sell", quantity="all")
+            notify(f"🔻 卖出 {symbol} - 原因：{reason}")
+            time.sleep(0.8)
 
-    # 资金检查
-    usdt_balance = client.get_symbol_balance("USDT")
-    if usdt_balance < 1:
-        print("⚠️ USDT 余额不足，无法买入推荐币种")
+    # 2️⃣ 获取 USDT 余额
+    usdt_balance = client.get_currency_balance("USDT")
+    print(f"💰 当前可用 USDT：{usdt_balance}")
+
+    # 3️⃣ 筛选还未持有的推荐币
+    new_buys = [s for s in top_candidates if s not in held_symbols][:max_holdings]
+
+    if not new_buys:
+        print("📭 没有新的买入币种，跳过买入。")
         return
 
-    # 买入推荐
-    budget = usdt_balance / len(recommended_symbols)
-    for symbol in recommended_symbols:
-        base = symbol.split("_")[0]
-        result = client.place_order(symbol=symbol, side="BUY", amount=budget)
-        if result:
-            print(f"🟢 买入 {symbol}：{budget} USDT")
-            send_notification(f"已买入 {symbol}：{budget} USDT")
-        else:
-            print(f"[ERROR] 买入 {symbol} 失败")
+    per_amount = usdt_balance / len(new_buys) if usdt_balance > 0 else 0
+    if per_amount <= 0:
+        print("⚠️ USDT 不足，无法进行买入操作")
+        return
+
+    for symbol in new_buys:
+        print(f"\033[92m🟢 准备买入：{symbol}，每币分配 USDT: {per_amount:.2f}\033[0m")
+        if IS_REAL_TRADING:
+            client.place_order(symbol, "buy", usdt_amount=per_amount)
+        notify(f"🟢 买入新币：{symbol}")
+        time.sleep(0.8)
