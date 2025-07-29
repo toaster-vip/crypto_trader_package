@@ -1,107 +1,63 @@
-# test_apis.py
 import time
+import base64
 import hmac
 import hashlib
 import requests
 
-# === 你的真实 API 信息（Crypto.com Exchange API）===
-API_KEY = "s7GzS87EZgTjSzgjG71fQo"
-API_SECRET = "cxakp_wZMVxFLmonyfWar4HhVy7f"
+# ✅ 替换为你的 KuCoin API 信息
+API_KEY = "688906b7dffe710001e697de"
+API_SECRET = "11a7e8e2-11f8-4602-a72d-7788b8938c31"
+API_PASSPHRASE = "ilovesophia"
 
+API_BASE = "https://api.kucoin.com"
 
-# ===============================
-# 🔸 Part 1: Exchange V1 API
-# ===============================
-def test_exchange_v1():
-    print("\n=== 🔸 Exchange V1 API 测试 ===")
-    base_url = "https://api.crypto.com/exchange/v1"
+def get_headers(endpoint, method="GET", body=""):
+    now = int(time.time() * 1000)
+    str_to_sign = f"{now}{method.upper()}{endpoint}{body}"
+    signature = base64.b64encode(
+        hmac.new(API_SECRET.encode('utf-8'), str_to_sign.encode('utf-8'), hashlib.sha256).digest()
+    ).decode()
 
-    def sign(req):
-        param_str = "".join([f"{k}{v}" for k, v in sorted(req['params'].items())])
-        sig_payload = req['method'] + str(req['id']) + API_KEY + param_str + str(req['nonce'])
-        sig = hmac.new(API_SECRET.encode(), sig_payload.encode(), hashlib.sha256).hexdigest()
-        req['sig'] = sig
-        return req
+    passphrase = base64.b64encode(
+        hmac.new(API_SECRET.encode('utf-8'), API_PASSPHRASE.encode('utf-8'), hashlib.sha256).digest()
+    ).decode()
 
-    def send(method, params=None):
-        req = {
-            "id": int(time.time() * 1000),
-            "method": method,
-            "api_key": API_KEY,
-            "params": params or {},
-            "nonce": int(time.time() * 1000)
-        }
-        signed = sign(req)
-        resp = requests.post(f"{base_url}/{method}", json=signed)
-        return resp.json()
+    return {
+        "KC-API-KEY": API_KEY,
+        "KC-API-SIGN": signature,
+        "KC-API-TIMESTAMP": str(now),
+        "KC-API-PASSPHRASE": passphrase,
+        "KC-API-KEY-VERSION": "2",
+        "Content-Type": "application/json"
+    }
 
-    # 📌 获取账户信息
-    summary = send("private/get-account-summary")
-    print("账户信息:", summary)
+def test_get_accounts():
+    endpoint = "/api/v1/accounts"
+    url = API_BASE + endpoint
+    headers = get_headers(endpoint)
+    print("▶ 请求账户资产列表中...")
+    resp = requests.get(url, headers=headers)
+    print(resp.json())
 
-    # 📌 获取交易对列表
-    try:
-        instruments = requests.get(f"{base_url}/public/get-instruments").json()
-        print("交易对数量:", len(instruments.get("result", {}).get("instruments", [])))
-    except Exception as e:
-        print("[ERROR] 获取交易对失败:", e)
+def test_get_balance(currency="USDT"):
+    endpoint = f"/api/v1/accounts?currency={currency}"
+    url = API_BASE + endpoint
+    headers = get_headers(endpoint)
+    print(f"▶ 获取 {currency} 余额中...")
+    resp = requests.get(url, headers=headers)
+    print(resp.json())
 
-    # 📌 获取 BTC_USDT 最新行情
-    try:
-        ticker = requests.get(f"{base_url}/public/get-ticker", params={"instrument_name": "BTC_USDT"}).json()
-        print("BTC_USDT 最新价格:", ticker.get("result", {}).get("data", {}))
-    except Exception as e:
-        print("[ERROR] 获取 BTC_USDT 价格失败:", e)
+def test_get_price(symbol="BTC-USDT"):
+    url = f"{API_BASE}/api/v1/market/orderbook/level1?symbol={symbol}"
+    print(f"▶ 获取 {symbol} 实时价格中...")
+    resp = requests.get(url)
+    print(resp.json())
 
-
-# ===============================
-# 🔹 Part 2: App V2 API
-# ===============================
-def test_app_v2():
-    print("\n=== 🔹 App V2 API 测试 ===")
-    base_url = "https://api.crypto.com/v2"
-
-    def sign(req):
-        param_str = "".join([f"{k}{v}" for k, v in sorted(req['params'].items())])
-        sig_payload = req['method'] + str(req['id']) + API_KEY + param_str + str(req['nonce'])
-        sig = hmac.new(API_SECRET.encode(), sig_payload.encode(), hashlib.sha256).hexdigest()
-        req['sig'] = sig
-        return req
-
-    def send(method, params=None):
-        req = {
-            "id": int(time.time() * 1000),
-            "method": method,
-            "api_key": API_KEY,
-            "params": params or {},
-            "nonce": int(time.time() * 1000)
-        }
-        signed = sign(req)
-        resp = requests.post(f"{base_url}/{method}", json=signed)
-        return resp.json()
-
-    # 📌 获取账户信息
-    summary = send("private/get-account-summary")
-    print("账户信息:", summary)
-
-    # 📌 获取交易对列表
-    try:
-        instruments = requests.get(f"{base_url}/public/get-instruments").json()
-        print("交易对数量:", len(instruments.get("result", {}).get("instruments", [])))
-    except Exception as e:
-        print("[ERROR] 获取交易对失败:", e)
-
-    # 📌 获取 BTC_USDT 最新行情
-    try:
-        ticker = requests.get(f"{base_url}/public/get-ticker", params={"instrument_name": "BTC_USDT"}).json()
-        print("BTC_USDT 最新价格:", ticker.get("result", {}).get("data", {}))
-    except Exception as e:
-        print("[ERROR] 获取 BTC_USDT 价格失败:", e)
-
-
-# ===============================
-# ✅ 主入口
-# ===============================
 if __name__ == "__main__":
-    test_exchange_v1()
-    test_app_v2()
+    print("✅ KuCoin API 测试开始")
+    test_get_accounts()
+    print("-" * 50)
+    test_get_balance("USDT")
+    print("-" * 50)
+    test_get_price("BTC-USDT")
+    print("✅ 测试结束")
