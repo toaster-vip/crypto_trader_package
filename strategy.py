@@ -2,23 +2,23 @@
 import numpy as np
 import pandas as pd
 import requests
-from config import STRATEGY_WEIGHTS
+from config import STRATEGY
 
 def get_klines(symbol, interval='1h', limit=100):
     """
     获取历史K线数据（用于技术指标分析）
     """
-    url = "https://api.crypto.com/v2/public/get-candlestick"
+    url = "https://api.kucoin.com/api/v1/market/candles"
     params = {
-        "instrument_name": symbol,
-        "interval": interval,
-        "limit": limit
+        "symbol": symbol,
+        "type": interval
     }
     try:
         resp = requests.get(url, params=params)
         resp.raise_for_status()
         data = resp.json()
-        candles = data.get("result", {}).get("data", [])
+        candles = data.get("data", [])
+        # 返回格式: [时间戳, 开, 高, 低, 收, 成交量]
         df = pd.DataFrame(candles, columns=['t', 'o', 'h', 'l', 'c', 'v'])
         df = df.sort_values(by='t')  # 时间升序
         df['close'] = df['c'].astype(float)
@@ -31,9 +31,6 @@ def get_klines(symbol, interval='1h', limit=100):
 # --- 策略函数 ---
 
 def score_rsi(df):
-    """
-    RSI指标（14期）：70超买（考虑卖），30超卖（考虑买）
-    """
     delta = df['close'].diff()
     up = delta.clip(lower=0)
     down = -1 * delta.clip(upper=0)
@@ -42,29 +39,23 @@ def score_rsi(df):
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
     if rsi.iloc[-1] < 30:
-        return 1  # 买
+        return 1
     elif rsi.iloc[-1] > 70:
-        return -1  # 卖
+        return -1
     return 0
 
 def score_macd(df):
-    """
-    MACD指标：快慢线交叉
-    """
     ema12 = df['close'].ewm(span=12).mean()
     ema26 = df['close'].ewm(span=26).mean()
     macd = ema12 - ema26
     signal = macd.ewm(span=9).mean()
     if macd.iloc[-1] > signal.iloc[-1] and macd.iloc[-2] <= signal.iloc[-2]:
-        return 1  # 金叉买入
+        return 1
     elif macd.iloc[-1] < signal.iloc[-1] and macd.iloc[-2] >= signal.iloc[-2]:
-        return -1  # 死叉卖出
+        return -1
     return 0
 
 def score_ma(df):
-    """
-    均线策略：短均线上穿长均线为买入信号
-    """
     ma_short = df['close'].rolling(5).mean()
     ma_long = df['close'].rolling(20).mean()
     if ma_short.iloc[-1] > ma_long.iloc[-1] and ma_short.iloc[-2] <= ma_long.iloc[-2]:
@@ -74,9 +65,6 @@ def score_ma(df):
     return 0
 
 def score_momentum(df):
-    """
-    动量策略：当前价格是否显著高于过去N期均值
-    """
     recent = df['close'].iloc[-1]
     past_avg = df['close'].rolling(10).mean().iloc[-2]
     if recent > past_avg * 1.02:
@@ -94,34 +82,25 @@ def get_symbol_score(symbol):
         print(f"[WARN] 跳过评分，数据不足：{symbol}")
         return 0
 
-    scores = {}
-    scores["rsi"] = score_rsi(df)
-    scores["macd"] = score_macd(df)
-    scores["ma"] = score_ma(df)
-    scores["momentum"] = score_momentum(df)
+    scores = {
+        "rsi": score_rsi(df),
+        "macd": score_macd(df),
+        "ma": score_ma(df),
+        "momentum": score_momentum(df),
+    }
 
     total = 0
     for key, score in scores.items():
-        weight = STRATEGY_WEIGHTS.get(key, 0)
+        weight = STRATEGY.get(f"{key.upper()}_WEIGHT", 0)
         total += score * weight
 
     print(f"📊 策略评分 {symbol}: {scores} ➜ 总分: {round(total, 2)}")
     return round(total, 2)
     
 def should_sell(score, threshold=0.2):
-    """
-    判断是否应当卖出（用于调仓）
-    - 评分低于阈值，建议卖出
-    """
     return score < threshold
 
 def check_take_profit_stop_loss(entry_price, current_price, take_profit=0.045, stop_loss=-0.025):
-    """
-    检查当前价格是否触发止盈或止损
-    - entry_price: 买入价
-    - current_price: 当前市价
-    - 返回: 'take_profit' / 'stop_loss' / None
-    """
     if entry_price == 0:
         return None
 
@@ -130,4 +109,4 @@ def check_take_profit_stop_loss(entry_price, current_price, take_profit=0.045, s
         return 'take_profit'
     elif change <= stop_loss:
         return 'stop_loss'
-    return None 
+    return None
