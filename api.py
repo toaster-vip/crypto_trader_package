@@ -90,17 +90,22 @@ class CryptoComExchangeClient:
         except Exception as e:
             print(f"[ERROR] 获取交易对失败: {e}")
             return []
-
-    def get_valid_symbols(self, quote_currency="USDT"):
+        
+    def get_valid_symbols(self):
         """
-        返回支持 USDT 交易的币种对列表（如 BTC_USDT）
+        获取支持的交易对（App API 不支持 /get-instruments 时使用 fallback）
         """
-        instruments = self.get_all_instruments()
-        return [
-            i["instrument_name"]
-            for i in instruments
-            if i.get("quote_currency") == quote_currency and i.get("instrument_type") == "SPOT"
-        ]
+        try:
+            response = requests.get(f"{self.base_url}/public/get-instruments")
+            response.raise_for_status()
+            data = response.json()
+            return [item["instrument_name"] for item in data["result"]["instruments"]]
+        except Exception as e:
+            print(f"[WARN] 获取交易对失败，使用默认硬编码 SYMBOLS")
+            return [
+                "BOME_USDT", "SHIB_USDT", "TRUMP_USDT",
+                "DOGE_USDT", "BTC_USDT", "ETH_USDT", "CRO_USDT"
+            ] 
 
     def get_account_holdings(self):
         result = self.get_account_summary()
