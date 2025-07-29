@@ -107,3 +107,27 @@ def get_symbol_score(symbol):
 
     print(f"📊 策略评分 {symbol}: {scores} ➜ 总分: {round(total, 2)}")
     return round(total, 2)
+    
+def should_sell(score, threshold=0.2):
+    """
+    判断是否应当卖出（用于调仓）
+    - 评分低于阈值，建议卖出
+    """
+    return score < threshold
+
+def check_take_profit_stop_loss(entry_price, current_price, take_profit=0.045, stop_loss=-0.025):
+    """
+    检查当前价格是否触发止盈或止损
+    - entry_price: 买入价
+    - current_price: 当前市价
+    - 返回: 'take_profit' / 'stop_loss' / None
+    """
+    if entry_price == 0:
+        return None
+
+    change = (current_price - entry_price) / entry_price
+    if change >= take_profit:
+        return 'take_profit'
+    elif change <= stop_loss:
+        return 'stop_loss'
+    return None 
