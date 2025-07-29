@@ -31,6 +31,19 @@ def run():
 
     # 1. 获取推荐币种（按评分排序）
     try:
+        from config import CONFIG
+
+        # 获取配置中 SYMBOLS 或从 client 动态拉取
+        symbols_to_analyze = CONFIG.get("SYMBOLS", [])
+        if not symbols_to_analyze:
+        try:
+            symbols_to_analyze = client.get_valid_symbols()
+        except Exception as e:
+            log(f"[WARN] 获取支持币种失败：{e}")
+            symbols_to_analyze = []
+
+# 调用分析函数
+recommended = analyze_all_symbols(client, symbols_to_analyze)
         recommended = analyze_all_symbols()
     except Exception as e:
         log(f"[ERROR] 分析失败: {e}")
