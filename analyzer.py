@@ -51,3 +51,13 @@ def find_emerging_tokens():
     emerging = [s for s, score, _ in result if score >= 0.6]
     print(f"🌱 新币候选：{emerging}")
     return emerging
+
+def analyze_all_symbols(client, symbols):
+    """
+    主分析函数：分析多个币种并返回评分字典
+    """
+    scored = {}
+    for symbol in symbols:
+        score = get_symbol_score(symbol)
+        scored[symbol] = score
+    return scored 
