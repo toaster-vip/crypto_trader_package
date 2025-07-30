@@ -78,7 +78,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
     if usdt_balance <= 0:
         print(f"{Fore.YELLOW}⚠️ 可用 USDT 不足，尝试从 Auto Earn 自动赎回...{Style.RESET_ALL}")
         if not simulate:
-            redeemed = client.redeem_earn_asset("USDT", amount=None)
+            redeemed = client.redeem_autoearn("USDT", amount=None)
             if redeemed:
                 print(f"{Fore.GREEN}✅ 成功赎回理财资产 USDT{Style.RESET_ALL}")
                 time.sleep(3)
