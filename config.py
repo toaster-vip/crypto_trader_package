@@ -1,36 +1,27 @@
-# config.py
+# save1/config.py
 
 CONFIG = {
-    # === KuCoin API 凭证 ===
-    "KUCOIN_API_KEY": "688990c9c714e80001ef1a2c",
-    "KUCOIN_API_SECRET": "473367a6-af01-48d2-8b78-2817ab879dc1",
+    "KUCOIN_API_KEY": "688990c9c714e80001ef1a2c",  # ✅ 新 Key
+    "KUCOIN_API_SECRET": "473367a6-af01-48d2-8b78-2817ab879dc1",  # ✅ 新 Secret
     "KUCOIN_API_PASSPHRASE": "ilovesophia",
 
-    # === 模式设置 ===
-    "SIMULATE": False,  # False = 实盘交易；True = 模拟测试
-
-    # === 通知设置 ===
+    "SIMULATE": False,  # ✅ 真实交易已启用
     "SERVER_CHAN_KEY": "SCT290772THBFAsWEtLa29M3l98qRSZ1DZ",
 
-    # === 策略权重（总分 = 策略分数 * 权重）===
-    "STRATEGY_WEIGHTS": {
-        "rsi": 0.3,
-        "macd": 0.3,
-        "ma": 0.2,
-        "momentum": 0.2,
-    },
-
-    # === 止盈止损设置 ===
     "TRADE": {
-        "TAKE_PROFIT": 0.045,   # +4.5%
-        "STOP_LOSS": -0.025,    # -2.5%
+        "TAKE_PROFIT": 0.045,
+        "STOP_LOSS": -0.025
     },
 
-    # === 日志设置 ===
-    "LOG_DIR": "/home/linuxuser/trade_logs/",
+    "STRATEGY": {
+        "MACD_WEIGHT": 0.3,
+        "RSI_WEIGHT": 0.2,
+        "SMA_WEIGHT": 0.2,
+        "MOMENTUM_WEIGHT": 0.2,
+        "TREND_WEIGHT": 0.1
+    },
 
-    # === 邮件通知（预留） ===
-    "EMAIL_RECEIVER": "toaster.vip@gmail.com"
+    "LOG_DIR": "/home/linuxuser/trade_logs/"
 }
 
 # 保持兼容性（旧模块使用）
@@ -39,7 +30,6 @@ KUCOIN_API_SECRET = CONFIG["KUCOIN_API_SECRET"]
 KUCOIN_API_PASSPHRASE = CONFIG["KUCOIN_API_PASSPHRASE"]
 SIMULATE = CONFIG["SIMULATE"]
 SERVER_CHAN_KEY = CONFIG["SERVER_CHAN_KEY"]
-STRATEGY_WEIGHTS = CONFIG["STRATEGY_WEIGHTS"]
-TAKE_PROFIT = CONFIG["TRADE"]["TAKE_PROFIT"]
-STOP_LOSS = CONFIG["TRADE"]["STOP_LOSS"]
+TRADE = CONFIG["TRADE"]
+STRATEGY = CONFIG["STRATEGY"]
 LOG_DIR = CONFIG["LOG_DIR"]
