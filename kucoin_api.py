@@ -1,4 +1,3 @@
-# kucoin_api.py
 import time
 import hmac
 import base64
@@ -6,6 +5,7 @@ import hashlib
 import requests
 import json
 from config import CONFIG
+
 
 class KuCoinClient:
     def __init__(self):
@@ -57,7 +57,11 @@ class KuCoinClient:
             response = requests.get(url)
             data = response.json()
             pairs = data.get("data", [])
-            usdt_symbols = [p["symbol"] for p in pairs if p["quoteCurrency"] == "USDT" and p["enableTrading"]]
+            usdt_symbols = [
+                p["symbol"]
+                for p in pairs
+                if p["quoteCurrency"] == "USDT" and p["enableTrading"]
+            ]
             return usdt_symbols
         except Exception as e:
             print(f"[ERROR] 获取交易对失败: {e}")
@@ -107,7 +111,7 @@ class KuCoinClient:
         except Exception as e:
             print(f"[ERROR] 下单请求失败: {e}")
             return None
-            
+
     def get_symbol_price(self, symbol):
         """
         获取某个交易对的最新成交价（如 PROM-USDT）
@@ -122,17 +126,17 @@ class KuCoinClient:
         except Exception as e:
             print(f"[ERROR] 获取价格失败 {symbol}: {e}")
             return None
-            
+
     def get_timestamp(self):
-    	"""
-    	获取当前 KuCoin 服务器时间戳（毫秒）
-    	"""
-    	try:
-        	url = self.base_url + "/api/v1/timestamp"
-        	response = requests.get(url)
-        	response.raise_for_status()
-        	data = response.json()
-        	return int(data["data"])
-    	except Exception as e:
-        	print(f"[ERROR] 获取时间戳失败: {e}")
-        return int(time.time() * 1000)
+        """
+        获取当前 KuCoin 服务器时间戳（毫秒）
+        """
+        try:
+            url = self.base_url + "/api/v1/timestamp"
+            response = requests.get(url)
+            response.raise_for_status()
+            data = response.json()
+            return int(data["data"])
+        except Exception as e:
+            print(f"[ERROR] 获取时间戳失败: {e}")
+            return int(time.time() * 1000)
