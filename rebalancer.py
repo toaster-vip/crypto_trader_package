@@ -1,27 +1,44 @@
 # rebalancer.py
+
 from config import CONFIG
-from notifier import send_serverchan_notification
 from colorama import Fore, Style
+import json
+import os
 
-def rebalance_portfolio(client, current_holdings, recommended_symbols):
+def rebalance_portfolio(client, current_holdings, recommended_symbols, positions_file):
     simulate = CONFIG["SIMULATE"]
-    take_profit = CONFIG["TRADE"]["TAKE_PROFIT"]
-    stop_loss = CONFIG["TRADE"]["STOP_LOSS"]
+    fee_rate = 0.001  # 手续费0.1%
 
+    if os.path.exists(positions_file):
+        with open(positions_file, "r") as f:
+            positions = json.load(f)
+    else:
+        positions = {}
+
+    # 卖出非推荐币种
     for symbol in current_holdings:
         if symbol == "USDT":
             continue
-        full_symbol = f"{symbol}-USDT"
-        if full_symbol not in recommended_symbols:
+        full = f"{symbol}-USDT"
+        if full not in recommended_symbols:
             print(f"{Fore.RED}💔 卖出弱势币种: {symbol}{Style.RESET_ALL}")
             if not simulate:
-                client.place_order(full_symbol, "sell", size="100")  # 此处应使用真实 size 逻辑
-            send_serverchan_notification(f"卖出 {symbol}", f"{symbol} 不在推荐列表中，已卖出")
+                client.place_order(full, "sell", size="100")  # 示例
+            positions.pop(symbol, None)  # 删除记录
 
+    # 买入推荐币种
     for full_symbol in recommended_symbols:
         base = full_symbol.replace("-USDT", "")
         if base not in current_holdings:
             print(f"{Fore.GREEN}💚 买入潜力币: {base}{Style.RESET_ALL}")
+            price = client.get_latest_price(full_symbol)
+            cost = price * (1 + fee_rate)
             if not simulate:
-                client.place_order(full_symbol, "buy", size="10")  # 示例：使用固定 size
-            send_serverchan_notification(f"买入 {base}", f"{base} 为推荐币种，已买入")
+                client.place_order(full_symbol, "buy", size="10")
+            positions[base] = {
+                "entry_price": round(cost, 6),
+                "timestamp": client.get_timestamp()
+            }
+
+    with open(positions_file, "w") as f:
+        json.dump(positions, f, indent=2)
