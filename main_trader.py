@@ -1,6 +1,7 @@
 # main_trader.py
 import os
 import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from kucoin_api import KuCoinClient
 from strategy import get_symbol_score
 from rebalancer import rebalance_portfolio
@@ -12,6 +13,8 @@ colorama_init(autoreset=True)
 
 # ✅ 是否启用测试模式（只分析前 30 个币种）
 TEST_MODE = True
+# 🧵 设置最大并发线程数（推荐值：5~20）
+MAX_WORKERS = 10
 
 def log(message):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -34,19 +37,24 @@ def main():
         usdt_symbols = usdt_symbols[:30]
 
     scores = {}
-    for symbol in usdt_symbols:
-        try:
-            score = get_symbol_score(symbol)
-            scores[symbol] = score
-            print(f"{Fore.YELLOW}{symbol:<12} Score: {score:.3f}{Style.RESET_ALL}")
-        except Exception as e:
-            print(f"{Fore.RED}[ERROR] 无法分析 {symbol}: {e}{Style.RESET_ALL}")
+
+    log(f"🚀 开始并发分析 {len(usdt_symbols)} 个币种 (线程数={MAX_WORKERS})")
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_symbol = {executor.submit(get_symbol_score, symbol): symbol for symbol in usdt_symbols}
+
+        for future in as_completed(future_to_symbol):
+            symbol = future_to_symbol[future]
+            try:
+                score = future.result()
+                scores[symbol] = score
+                print(f"{Fore.YELLOW}{symbol:<12} Score: {score:.3f}{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{Fore.RED}[ERROR] 无法分析 {symbol}: {e}{Style.RESET_ALL}")
 
     if not scores:
         log("⚠️ 没有可用的评分结果，跳过交易。")
         return
 
-    # 排序并选出潜力币种
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     top_symbols = [s[0] for s in sorted_scores[:3]]
     log(f"🔥 评分最高币种: {top_symbols}")
