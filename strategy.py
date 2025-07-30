@@ -1,9 +1,13 @@
+# strategy.py
 import numpy as np
 import pandas as pd
 import requests
 from config import STRATEGY
 
 def get_klines(symbol, interval='1hour', limit=100):
+    """
+    获取 KuCoin 历史K线数据（适配7列）
+    """
     url = "https://api.kucoin.com/api/v1/market/candles"
     params = {
         "symbol": symbol,
@@ -13,13 +17,19 @@ def get_klines(symbol, interval='1hour', limit=100):
         resp = requests.get(url, params=params)
         resp.raise_for_status()
         candles = resp.json().get("data", [])
-        df = pd.DataFrame(candles, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        if not candles:
+            print(f"[WARN] 无K线数据：{symbol}")
+            return None
+        df = pd.DataFrame(candles, columns=['t', 'o', 'c', 'h', 'l', 'v', 'turnover'])
         df = df.sort_values(by='t')
         df['close'] = df['c'].astype(float)
         return df
     except Exception as e:
         print(f"[ERROR] 获取K线数据失败: {e}")
         return None
+
+
+# === 策略函数 ===
 
 def score_rsi(df):
     delta = df['close'].diff()
@@ -64,6 +74,9 @@ def score_momentum(df):
         return -1
     return 0
 
+
+# === 综合评分 ===
+
 def get_symbol_score(symbol):
     df = get_klines(symbol)
     if df is None or len(df) < 30:
@@ -84,6 +97,9 @@ def get_symbol_score(symbol):
 
     print(f"📊 策略评分 {symbol}: {scores} ➜ 总分: {round(total, 2)}")
     return round(total, 2)
+
+
+# === 交易辅助判断 ===
 
 def should_sell(score, threshold=0.2):
     return score < threshold
