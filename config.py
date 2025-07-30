@@ -11,20 +11,20 @@ CONFIG = {
         "STOP_LOSS": -0.025     # 止损 -2.5%
     },
 
-	"STRATEGY": {
-    	"MACD_WEIGHT": 0.2,
-    	"RSI_WEIGHT": 0.1,
-    	"SMA_WEIGHT": 0.1,
-    	"MOMENTUM_WEIGHT": 0.1,
-    	"TREND_WEIGHT": 0.05,
-    	"ADX_WEIGHT": 0.1,
-    	"OBV_WEIGHT": 0.1,
-    	"CCI_WEIGHT": 0.05,
-    	"KDJ_WEIGHT": 0.05,
-    	"SAR_WEIGHT": 0.05,
-    	"BOLLINGER_WEIGHT": 0.05,
-    	"VOLUME_WEIGHT": 0.05
-	}，
+    "STRATEGY": {
+        "MACD_WEIGHT": 0.2,
+        "RSI_WEIGHT": 0.1,
+        "SMA_WEIGHT": 0.1,
+        "MOMENTUM_WEIGHT": 0.1,
+        "TREND_WEIGHT": 0.05,
+        "ADX_WEIGHT": 0.1,
+        "OBV_WEIGHT": 0.1,
+        "CCI_WEIGHT": 0.05,
+        "KDJ_WEIGHT": 0.05,
+        "SAR_WEIGHT": 0.05,
+        "BOLLINGER_WEIGHT": 0.05,
+        "VOLUME_WEIGHT": 0.05
+    },
 
     "RESERVE_RATIO": 0.07,  # ✅ 保留 7% USDT 不参与买入，用于手续费、行情反转等缓冲
 
