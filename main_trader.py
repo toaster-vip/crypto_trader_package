@@ -8,8 +8,8 @@ from strategy import get_symbol_score
 from rebalancer import rebalance_portfolio
 from notifier import send_serverchan_notification
 from config import CONFIG, LOG_DIR
-
 from colorama import Fore, Style, init as colorama_init
+
 colorama_init(autoreset=True)
 
 TEST_MODE = False
@@ -28,14 +28,8 @@ def log(msg):
 
 def analyze_in_batches(symbols, max_workers=10, batch_size=50, delay_between_batches=2):
     scores = {}
-    total = len(symbols)
-    batch_count = (total + batch_size - 1) // batch_size
-    log(f"🚀 共需分析 {total} 个币种，将分为 {batch_count} 批")
-
-    for i in range(0, total, batch_size):
+    for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i + batch_size]
-        log(f"📦 分析第 {i // batch_size + 1}/{batch_count} 批，共 {len(batch)} 个币种")
-
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(get_symbol_score, s): s for s in batch}
             for future in as_completed(futures):
@@ -93,8 +87,7 @@ def generate_profit_report(client):
     send_serverchan_notification("📊 每日盈亏报告", content)
 
 def main():
-    start_time = time.time()  # ⏱️ 开始计时
-
+    start_time = time.time()
     log("📈 自动交易脚本开始执行")
     client = KuCoinClient()
     holdings = client.get_account_holdings()
@@ -121,7 +114,7 @@ def main():
         log("📬 生成定期盈亏报告")
         generate_profit_report(client)
 
-    elapsed = time.time() - start_time  # ⏱️ 计算耗时
+    elapsed = time.time() - start_time
     log(f"⏱️ 本轮运行耗时: {elapsed:.2f} 秒")
 
 if __name__ == "__main__":
