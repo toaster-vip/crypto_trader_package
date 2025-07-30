@@ -103,7 +103,7 @@ def main():
         return
 
     top = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    top_symbols_with_scores = top[:3]  # [(symbol, score), ...]
+    top_symbols_with_scores = top[:3]  # e.g., [("BTC-USDT", 0.83), ("ETH-USDT", 0.79), ...]
     log(f"🔥 评分最高币种: {[s[0] for s in top_symbols_with_scores]}")
 
     rebalance_portfolio(client, holdings, top_symbols_with_scores, POSITIONS_FILE)
