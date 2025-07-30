@@ -113,9 +113,6 @@ class KuCoinClient:
             return None
 
     def get_symbol_price(self, symbol):
-        """
-        获取某个交易对的最新成交价（如 PROM-USDT）
-        """
         url = f"{self.base_url}/api/v1/market/orderbook/level1"
         params = {"symbol": symbol}
         try:
@@ -128,9 +125,6 @@ class KuCoinClient:
             return None
 
     def get_timestamp(self):
-        """
-        获取当前 KuCoin 服务器时间戳（毫秒）
-        """
         try:
             url = self.base_url + "/api/v1/timestamp"
             response = requests.get(url)
@@ -140,3 +134,29 @@ class KuCoinClient:
         except Exception as e:
             print(f"[ERROR] 获取时间戳失败: {e}")
             return int(time.time() * 1000)
+
+    def redeem_autoearn(self, currency="USDT", amount=None):
+        """
+        从 Auto Earn 账户赎回资产至主账户。
+        amount = None 时表示赎回全部。
+        """
+        endpoint = "/api/v1/earn/account/redeem"
+        url = self.base_url + endpoint
+        body_dict = {
+            "currency": currency,
+            "redeemAmount": str(amount) if amount else ""
+        }
+        body = json.dumps(body_dict)
+        headers = self._get_headers("POST", endpoint, body)
+        try:
+            response = requests.post(url, headers=headers, data=body)
+            res_json = response.json()
+            if res_json.get("code") == "200000":
+                print(f"[INFO] 已提交 Auto Earn 赎回请求（{currency}）")
+                return True
+            else:
+                print(f"[WARN] Auto Earn 赎回失败: {res_json}")
+                return False
+        except Exception as e:
+            print(f"[ERROR] Auto Earn 请求失败: {e}")
+            return False
