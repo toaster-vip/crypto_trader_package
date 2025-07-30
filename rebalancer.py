@@ -31,7 +31,7 @@ def rebalance_portfolio(client, current_holdings, recommended_symbols, positions
         base = full_symbol.replace("-USDT", "")
         if base not in current_holdings:
             print(f"{Fore.GREEN}💚 买入潜力币: {base}{Style.RESET_ALL}")
-            price = client.get_latest_price(full_symbol)
+            price = client.get_symbol_price(full_symbol)
             cost = price * (1 + fee_rate)
             if not simulate:
                 client.place_order(full_symbol, "buy", size="10")
