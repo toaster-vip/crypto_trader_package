@@ -1,32 +1,46 @@
 # strategy.py
+import time
 import numpy as np
 import pandas as pd
 import requests
 from config import STRATEGY
 
+MAX_RETRIES = 3
+
 def get_klines(symbol, interval='1hour', limit=100):
     """
-    获取 KuCoin 历史K线数据（适配7列）
+    获取 KuCoin 历史K线数据（带限速与重试）
     """
     url = "https://api.kucoin.com/api/v1/market/candles"
     params = {
         "symbol": symbol,
         "type": interval
     }
-    try:
-        resp = requests.get(url, params=params)
-        resp.raise_for_status()
-        candles = resp.json().get("data", [])
-        if not candles:
-            print(f"[WARN] 无K线数据：{symbol}")
-            return None
-        df = pd.DataFrame(candles, columns=['t', 'o', 'c', 'h', 'l', 'v', 'turnover'])
-        df = df.sort_values(by='t')
-        df['close'] = df['c'].astype(float)
-        return df
-    except Exception as e:
-        print(f"[ERROR] 获取K线数据失败: {e}")
-        return None
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            time.sleep(0.15)  # 控制频率，避免触发 429
+            resp = requests.get(url, params=params)
+            if resp.status_code == 429:
+                wait_time = 2 ** attempt
+                print(f"[WARN] 请求过快（429），等待 {wait_time}s 重试第 {attempt}/{MAX_RETRIES} 次：{symbol}")
+                time.sleep(wait_time)
+                continue
+            resp.raise_for_status()
+            candles = resp.json().get("data", [])
+            if not candles:
+                print(f"[WARN] 无K线数据：{symbol}")
+                return None
+            df = pd.DataFrame(candles, columns=['t', 'o', 'c', 'h', 'l', 'v', 'turnover'])
+            df = df.sort_values(by='t')
+            df['close'] = df['c'].astype(float)
+            return df
+        except Exception as e:
+            print(f"[ERROR] 获取K线失败（第 {attempt} 次）: {e}")
+            time.sleep(1)
+
+    print(f"[ERROR] 多次尝试仍失败，放弃：{symbol}")
+    return None
 
 
 # === 策略函数 ===
