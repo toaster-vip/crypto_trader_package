@@ -10,7 +10,7 @@ CONFIG = {
     "SIMULATE": False,  # False = 实盘交易；True = 模拟测试
 
     # === 通知设置 ===
-    "SERVER_CHAN_KEY": "SCT290772THBFAsWEtLa29M3l98qRSZ1DZ",  # Server酱
+    "SERVER_CHAN_KEY": "SCT290772THBFAsWEtLa29M3l98qRSZ1DZ",
 
     # === 策略权重（总分 = 策略分数 * 权重）===
     "STRATEGY_WEIGHTS": {
@@ -21,23 +21,25 @@ CONFIG = {
     },
 
     # === 止盈止损设置 ===
-    "TAKE_PROFIT": 0.045,   # +4.5%
-    "STOP_LOSS": -0.025,    # -2.5%
+    "TRADE": {
+        "TAKE_PROFIT": 0.045,   # +4.5%
+        "STOP_LOSS": -0.025,    # -2.5%
+    },
 
     # === 日志设置 ===
     "LOG_DIR": "/home/linuxuser/trade_logs/",
 
-    # === 邮件通知（暂未启用） ===
-    "EMAIL_RECEIVER": "toaster.vip@gmail.com",
+    # === 邮件通知（预留） ===
+    "EMAIL_RECEIVER": "toaster.vip@gmail.com"
 }
 
-# 向后兼容原始字段
+# 保持兼容性（旧模块使用）
 KUCOIN_API_KEY = CONFIG["KUCOIN_API_KEY"]
 KUCOIN_API_SECRET = CONFIG["KUCOIN_API_SECRET"]
 KUCOIN_API_PASSPHRASE = CONFIG["KUCOIN_API_PASSPHRASE"]
 SIMULATE = CONFIG["SIMULATE"]
 SERVER_CHAN_KEY = CONFIG["SERVER_CHAN_KEY"]
 STRATEGY_WEIGHTS = CONFIG["STRATEGY_WEIGHTS"]
-TAKE_PROFIT = CONFIG["TAKE_PROFIT"]
-STOP_LOSS = CONFIG["STOP_LOSS"]
+TAKE_PROFIT = CONFIG["TRADE"]["TAKE_PROFIT"]
+STOP_LOSS = CONFIG["TRADE"]["STOP_LOSS"]
 LOG_DIR = CONFIG["LOG_DIR"]
