@@ -3,7 +3,7 @@ import os
 import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from kucoin_api import KuCoinClient
-from strategy import get_symbol_score
+from strategy import get_symbol_score, wrap_with_timing_and_cooldown  # ✅ 新增计时器导入
 from rebalancer import rebalance_portfolio
 from notifier import send_serverchan_notification
 from config import CONFIG, LOG_DIR
@@ -22,6 +22,7 @@ def log(message):
     with open(os.path.join(LOG_DIR, "trading.log"), "a") as f:
         f.write(f"[{timestamp}] {message}\n")
 
+@wrap_with_timing_and_cooldown  # ✅ 外层包裹计时器 + 限速保护
 def main():
     log("📈 自动交易脚本开始执行")
     client = KuCoinClient()
