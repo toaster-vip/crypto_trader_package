@@ -143,9 +143,11 @@ class KuCoinClient:
         endpoint = "/api/v1/earn/account/redeem"
         url = self.base_url + endpoint
         body_dict = {
-            "currency": currency,
-            "redeemAmount": str(amount) if amount else ""
+            "currency": currency
         }
+        if amount:
+            body_dict["redeemAmount"] = str(amount)
+
         body = json.dumps(body_dict)
         headers = self._get_headers("POST", endpoint, body)
         try:
