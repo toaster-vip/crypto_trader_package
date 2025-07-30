@@ -10,6 +10,9 @@ from config import CONFIG, LOG_DIR
 from colorama import Fore, Style, init as colorama_init
 colorama_init(autoreset=True)
 
+# ✅ 是否启用测试模式（只分析前 30 个币种）
+TEST_MODE = True
+
 def log(message):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"{Fore.CYAN}[{timestamp}] {message}{Style.RESET_ALL}")
@@ -25,6 +28,10 @@ def main():
 
     supported_symbols = client.get_supported_symbols()
     usdt_symbols = [s for s in supported_symbols if s.endswith("USDT")]
+
+    if TEST_MODE:
+        log("🧪 [TEST MODE] 只分析前 30 个 USDT 币种")
+        usdt_symbols = usdt_symbols[:30]
 
     scores = {}
     for symbol in usdt_symbols:
