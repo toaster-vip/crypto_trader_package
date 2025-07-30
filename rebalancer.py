@@ -76,10 +76,21 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
     print(f"{Fore.CYAN}💵 当前 USDT 总余额: {total_usdt:.4f}, 可用: {usdt_balance:.4f}（保留 {reserve_ratio*100:.1f}%）{Style.RESET_ALL}")
 
     if usdt_balance <= 0:
-        print(f"{Fore.YELLOW}⚠️ USDT 余额不足，跳过买入操作{Style.RESET_ALL}")
-        with open(positions_file, "w") as f:
-            json.dump(positions, f, indent=2)
-        return
+        print(f"{Fore.YELLOW}⚠️ 可用 USDT 不足，尝试从 Auto Earn 自动赎回...{Style.RESET_ALL}")
+        if not simulate:
+            redeemed = client.redeem_earn_asset("USDT", amount=None)
+            if redeemed:
+                print(f"{Fore.GREEN}✅ 成功赎回理财资产 USDT{Style.RESET_ALL}")
+                time.sleep(3)
+                current_holdings = client.get_account_holdings()
+                total_usdt = current_holdings.get("USDT", 0)
+                usdt_balance = total_usdt * (1 - reserve_ratio)
+                print(f"{Fore.CYAN}💵 赎回后 USDT 总余额: {total_usdt:.4f}, 可用: {usdt_balance:.4f}{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.RED}❌ Auto Earn 赎回失败，跳过本轮买入{Style.RESET_ALL}")
+                with open(positions_file, "w") as f:
+                    json.dump(positions, f, indent=2)
+                return
 
     # 买入历史
     if os.path.exists(BUY_HISTORY_FILE):
