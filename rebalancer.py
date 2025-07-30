@@ -1,5 +1,3 @@
-# rebalancer.py
-
 import os
 import json
 import time
@@ -50,6 +48,15 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
             client.place_order(full_symbol, "sell", size=str(qty))
         positions.pop(symbol, None)
 
+    # 👉 Debug 当前真实持仓币种评分对照
+    print(f"{Fore.MAGENTA}[DEBUG] 当前真实持仓币种评分对照：{Style.RESET_ALL}")
+    for symbol in current_holdings:
+        if symbol == "USDT":
+            continue
+        full = f"{symbol}-USDT"
+        score = recommended_scores.get(full, "N/A")
+        print(f"{Fore.MAGENTA}- {full}: 评分 = {score}{Style.RESET_ALL}")
+
     # 卖出不再推荐的币
     for symbol in current_holdings:
         if symbol == "USDT":
@@ -58,10 +65,12 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
         if full in recommended_symbols:
             rank = recommended_symbols.index(full) + 1
             if rank <= HOLD_THRESHOLD_RANK:
+                print(f"{Fore.LIGHTBLACK_EX}🔒 保留当前币种 {symbol}，因仍在Top{HOLD_THRESHOLD_RANK}{Style.RESET_ALL}")
                 continue
             current_score = recommended_scores.get(full, 0)
             min_required = max(recommended_scores.values()) * (1 - SCORE_DIFF_THRESHOLD)
             if current_score >= min_required:
+                print(f"{Fore.LIGHTBLACK_EX}🔒 保留当前币种 {symbol}，分数相差不大（{current_score:.4f} vs {min_required:.4f}）{Style.RESET_ALL}")
                 continue
         if symbol in positions:
             print(f"{Fore.LIGHTBLACK_EX}🧹 卖出非优先币种 {symbol}{Style.RESET_ALL}")
