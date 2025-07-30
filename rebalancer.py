@@ -1,5 +1,3 @@
-# rebalancer.py
-
 import os
 import json
 import time
@@ -16,6 +14,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
     fee_rate = 0.001
     take_profit = CONFIG["TRADE"]["TAKE_PROFIT"]
     stop_loss = CONFIG["TRADE"]["STOP_LOSS"]
+    reserve_ratio = CONFIG.get("RESERVE_RATIO", 0.07)
 
     recommended_symbols = [s for s, _ in recommended_tuples]
     recommended_scores = {s: sc for s, sc in recommended_tuples}
@@ -69,7 +68,10 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
                 client.place_order(full, "sell", size=str(current_holdings[symbol]))
             positions.pop(symbol, None)
 
-    usdt_balance = current_holdings.get("USDT", 0)
+    # 仅使用剩余 USDT 的 93% 参与分配
+    total_usdt = current_holdings.get("USDT", 0)
+    usdt_balance = total_usdt * (1 - reserve_ratio)
+
     if usdt_balance <= 0:
         print(f"{Fore.YELLOW}⚠️ USDT 余额不足，跳过买入操作{Style.RESET_ALL}")
         with open(positions_file, "w") as f:
