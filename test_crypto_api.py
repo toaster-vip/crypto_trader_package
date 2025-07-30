@@ -4,26 +4,28 @@ import hmac
 import hashlib
 import requests
 
-# ✅ 替换为你的 KuCoin API 信息
-API_KEY = "688906b7dffe710001e697de"
-API_SECRET = "11a7e8e2-11f8-4602-a72d-7788c31"
+# ✅ 来自 config.py 中的 API 配置
+API_KEY = "688990c9c714e80001ef1a2c"
+API_SECRET = "473367a6-af01-48d2-8b78-2817ab879dc1"
 API_PASSPHRASE = "ilovesophia"
 
 API_BASE = "https://api.kucoin.com"
 
 def get_headers(endpoint, method="GET", body=""):
-    now = str(int(time.time() * 1000))
+    now = int(time.time() * 1000)
     str_to_sign = f"{now}{method.upper()}{endpoint}{body}"
     signature = base64.b64encode(
         hmac.new(API_SECRET.encode('utf-8'), str_to_sign.encode('utf-8'), hashlib.sha256).digest()
     ).decode()
+
     passphrase = base64.b64encode(
         hmac.new(API_SECRET.encode('utf-8'), API_PASSPHRASE.encode('utf-8'), hashlib.sha256).digest()
     ).decode()
+
     return {
         "KC-API-KEY": API_KEY,
         "KC-API-SIGN": signature,
-        "KC-API-TIMESTAMP": now,
+        "KC-API-TIMESTAMP": str(now),
         "KC-API-PASSPHRASE": passphrase,
         "KC-API-KEY-VERSION": "2",
         "Content-Type": "application/json"
@@ -51,34 +53,11 @@ def test_get_price(symbol="BTC-USDT"):
     resp = requests.get(url)
     print(resp.json())
 
-def check_all_usdt_accounts():
-    endpoint = "/api/v1/accounts"
-    url = API_BASE + endpoint
-    headers = get_headers(endpoint)
-    print("🔍 检查所有账户中的 USDT 分布...\n")
-    try:
-        resp = requests.get(url, headers=headers)
-        data = resp.json()
-        if data.get("code") != "200000":
-            print("[ERROR] 无法获取账户信息:", data)
-            return
-        found = False
-        for acc in data.get("data", []):
-            if acc["currency"] == "USDT":
-                found = True
-                print(f"账户类型: {acc['type']:<10} | 可用: {acc['available']:<12} | 总余额: {acc['balance']}")
-        if not found:
-            print("❌ 没有找到任何 USDT 资产")
-    except Exception as e:
-        print(f"[ERROR] 请求失败: {e}")
-
 if __name__ == "__main__":
-    print("✅ KuCoin API 测试开始\n")
+    print("✅ KuCoin API 测试开始")
     test_get_accounts()
     print("-" * 50)
     test_get_balance("USDT")
     print("-" * 50)
     test_get_price("BTC-USDT")
-    print("-" * 50)
-    check_all_usdt_accounts()
-    print("\n✅ 测试结束")
+    print("✅ 测试结束")
