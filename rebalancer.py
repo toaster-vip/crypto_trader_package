@@ -1,3 +1,5 @@
+# rebalancer.py
+
 import os
 import json
 import time
@@ -6,8 +8,8 @@ from colorama import Fore, Style
 
 BUY_HISTORY_FILE = os.path.join(CONFIG["LOG_DIR"], "buy_history.json")
 HOLD_THRESHOLD_RANK = 10
-SCORE_DIFF_THRESHOLD = 0.10  # 新币评分需高出当前币10%
-REQUIRE_CONSISTENT_ROUNDS = 2  # 连续出现轮次要求
+SCORE_DIFF_THRESHOLD = 0.10
+REQUIRE_CONSISTENT_ROUNDS = 2
 
 def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_file):
     simulate = CONFIG["SIMULATE"]
@@ -20,7 +22,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
     recommended_scores = {s: sc for s, sc in recommended_tuples}
     top_symbols = [s for s, _ in recommended_tuples[:3]]
 
-    # 加载 positions
+    # 加载历史持仓
     if os.path.exists(positions_file):
         with open(positions_file, "r") as f:
             positions = json.load(f)
@@ -48,7 +50,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
             client.place_order(full_symbol, "sell", size=str(qty))
         positions.pop(symbol, None)
 
-    # 卖出不再推荐且不满足“持仓保持权重+评分门槛”的币种
+    # 卖出不再推荐的币
     for symbol in current_holdings:
         if symbol == "USDT":
             continue
@@ -56,21 +58,22 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
         if full in recommended_symbols:
             rank = recommended_symbols.index(full) + 1
             if rank <= HOLD_THRESHOLD_RANK:
-                continue  # 保持持仓权重
-            recommended_score = recommended_scores.get(full, 0)
+                continue
             current_score = recommended_scores.get(full, 0)
             min_required = max(recommended_scores.values()) * (1 - SCORE_DIFF_THRESHOLD)
             if current_score >= min_required:
-                continue  # 差距不够大，不卖
+                continue
         if symbol in positions:
             print(f"{Fore.LIGHTBLACK_EX}🧹 卖出非优先币种 {symbol}{Style.RESET_ALL}")
             if not simulate:
                 client.place_order(full, "sell", size=str(current_holdings[symbol]))
             positions.pop(symbol, None)
 
-    # 仅使用剩余 USDT 的 93% 参与分配
+    # 可用 USDT
     total_usdt = current_holdings.get("USDT", 0)
     usdt_balance = total_usdt * (1 - reserve_ratio)
+
+    print(f"{Fore.CYAN}💵 当前 USDT 总余额: {total_usdt:.4f}, 可用: {usdt_balance:.4f}（保留 {reserve_ratio*100:.1f}%）{Style.RESET_ALL}")
 
     if usdt_balance <= 0:
         print(f"{Fore.YELLOW}⚠️ USDT 余额不足，跳过买入操作{Style.RESET_ALL}")
@@ -78,39 +81,45 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
             json.dump(positions, f, indent=2)
         return
 
-    # 加载买入历史
+    # 买入历史
     if os.path.exists(BUY_HISTORY_FILE):
         with open(BUY_HISTORY_FILE, "r") as f:
             buy_history = json.load(f)
     else:
         buy_history = {}
 
-    # 更新连续入榜轮数
     for s, _ in recommended_tuples:
         buy_history[s] = buy_history.get(s, 0) + 1
     for s in list(buy_history):
         if s not in recommended_symbols:
             buy_history[s] = 0
 
-    # 动态评分加权分配资金
+    # 动态分配
     total_score = sum([recommended_scores[s] for s in top_symbols])
+    print(f"{Fore.CYAN}📊 Top评分币种总分: {total_score:.4f}{Style.RESET_ALL}")
     for s in top_symbols:
         base = s.replace("-USDT", "")
+        score = recommended_scores[s]
         if base in current_holdings:
-            continue  # 已持有
+            print(f"{Fore.YELLOW}⏸️ 跳过已有持仓 {base}{Style.RESET_ALL}")
+            continue
         if buy_history.get(s, 0) < REQUIRE_CONSISTENT_ROUNDS:
             print(f"{Fore.BLUE}🕒 跳过新币 {base}（未连续上榜）{Style.RESET_ALL}")
             continue
 
         price = client.get_symbol_price(s)
         if not price:
+            print(f"{Fore.RED}⚠️ 获取币价失败 {s}{Style.RESET_ALL}")
             continue
-        allocation = (recommended_scores[s] / total_score) * usdt_balance
+        allocation = (score / total_score) * usdt_balance
         qty = round((allocation * (1 - fee_rate)) / price, 4)
+
+        print(f"{Fore.LIGHTGREEN_EX}📈 {base}: 评分={score:.4f}, 分配={allocation:.2f}USDT, 币价={price:.4f}, 下单量={qty}{Style.RESET_ALL}")
+
         if qty <= 0:
+            print(f"{Fore.LIGHTBLACK_EX}⚠️ 数量为0，跳过买入 {base}{Style.RESET_ALL}")
             continue
 
-        print(f"{Fore.GREEN}💚 买入 {base}: 分配 {allocation:.2f} USDT, 数量 {qty}{Style.RESET_ALL}")
         if not simulate:
             client.place_order(s, "buy", size=str(qty))
 
@@ -119,7 +128,6 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
             "timestamp": client.get_timestamp()
         }
 
-    # 保存
     with open(positions_file, "w") as f:
         json.dump(positions, f, indent=2)
     with open(BUY_HISTORY_FILE, "w") as f:
