@@ -13,11 +13,11 @@ def get_klines(symbol, interval='1hour', limit=100, max_retries=3):
         "type": interval
     }
     for attempt in range(max_retries):
-        time.sleep(0.10)
+        time.sleep(0.15)
         try:
             resp = requests.get(url, params=params, timeout=10)
             if resp.status_code == 429:
-                wait_time = 1 ** (attempt + 1)
+                wait_time = 2 ** (attempt + 1)
                 print(f"[WARN] 请求过快（429），等待 {wait_time}s 重试 {symbol}")
                 time.sleep(wait_time)
                 continue
