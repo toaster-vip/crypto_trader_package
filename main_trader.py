@@ -12,7 +12,7 @@ from colorama import Fore, Style, init as colorama_init
 colorama_init(autoreset=True)
 
 # ✅ 是否启用测试模式（只分析前 30 个币种）
-TEST_MODE = True
+TEST_MODE = False
 # 🧵 设置最大并发线程数（推荐值：5~20）
 MAX_WORKERS = 10
 
