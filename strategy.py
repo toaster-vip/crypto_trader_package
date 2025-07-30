@@ -6,6 +6,12 @@ import pandas as pd
 import requests
 from config import STRATEGY
 
+import time
+import numpy as np
+import pandas as pd
+import requests
+from config import STRATEGY
+
 def get_klines(symbol, interval='1hour', limit=100, max_retries=3):
     url = "https://api.kucoin.com/api/v1/market/candles"
     params = {
@@ -15,28 +21,44 @@ def get_klines(symbol, interval='1hour', limit=100, max_retries=3):
     for attempt in range(max_retries):
         time.sleep(0.15)
         try:
+            print(f"[⏳] 正在获取K线数据：{symbol}（第 {attempt+1} 次尝试）")
             resp = requests.get(url, params=params, timeout=10)
+
             if resp.status_code == 429:
                 wait_time = 2 ** (attempt + 1)
-                print(f"[WARN] 请求过快（429），等待 {wait_time}s 重试 {symbol}")
+                print(f"[⚠️] 请求过快（429），等待 {wait_time}s 后重试：{symbol}")
                 time.sleep(wait_time)
                 continue
-            resp.raise_for_status()
-            candles = resp.json().get("data", [])
-            if not candles:
-                print(f"[WARN] 无K线数据：{symbol}")
+
+            if resp.status_code != 200:
+                print(f"[❌] 状态码错误 {resp.status_code}：{symbol}，内容：{resp.text}")
+                continue
+
+            data = resp.json()
+            candles = data.get("data", [])
+
+            if not candles or not isinstance(candles, list):
+                print(f"[⚠️] 无效K线数据：{symbol}，返回：{data}")
                 return None
+
             df = pd.DataFrame(candles, columns=['t', 'o', 'c', 'h', 'l', 'v', 'turnover'])
             df = df.sort_values(by='t')
             df['close'] = df['c'].astype(float)
             df['high'] = df['h'].astype(float)
             df['low'] = df['l'].astype(float)
             df['volume'] = df['v'].astype(float)
+
+            if len(df) < 30:
+                print(f"[⚠️] 数据不足（仅 {len(df)} 行）：{symbol}")
+                return None
+
             return df
+
         except Exception as e:
-            print(f"[ERROR] 获取K线失败 {symbol}: {e}")
+            print(f"[🛑] 获取K线失败 {symbol}: {e}")
             time.sleep(1)
-    print(f"[ERROR] 多次重试失败，放弃：{symbol}")
+
+    print(f"[❌] 多次重试失败，放弃：{symbol}")
     return None
 
 # === 策略函数（打分范围为 -1.0 ~ +1.0） ===
