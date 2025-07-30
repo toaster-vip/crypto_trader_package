@@ -42,7 +42,6 @@ class KuCoinClient:
             data = response.json()
             balances = {}
             for acc in data.get("data", []):
-                # 只处理主账户
                 if acc.get("type") != "main":
                     continue
                 currency = acc["currency"]
@@ -76,15 +75,16 @@ class KuCoinClient:
             response = requests.get(url)
             data = response.json()
             ticker = data.get("data", {})
+
             return {
-                "price": float(ticker["last"]),
-                "open": float(ticker["open"]),
-                "high": float(ticker["high"]),
-                "low": float(ticker["low"]),
-                "vol": float(ticker["vol"]),
+                "price": float(ticker.get("last", 0.0)),
+                "open": float(ticker.get("open", 0.0)),
+                "high": float(ticker.get("high", 0.0)),
+                "low": float(ticker.get("low", 0.0)),
+                "vol": float(ticker.get("vol", 0.0)),
             }
         except Exception as e:
-            print(f"[ERROR] 获取行情失败: {e}")
+            print(f"[ERROR] 获取行情失败 {symbol}: {e}")
             return {}
 
     def place_order(self, symbol, side, size, price=None):
@@ -139,10 +139,6 @@ class KuCoinClient:
             return int(time.time() * 1000)
 
     def redeem_autoearn(self, currency="USDT", amount=None):
-        """
-        从 Auto Earn 账户赎回资产至主账户。
-        amount = None 时表示赎回全部。
-        """
         endpoint = "/api/v1/earn/account/redeem"
         url = self.base_url + endpoint
         body_dict = {
