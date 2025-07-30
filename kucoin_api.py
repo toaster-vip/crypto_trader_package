@@ -42,8 +42,11 @@ class KuCoinClient:
             data = response.json()
             balances = {}
             for acc in data.get("data", []):
+                # 只处理主账户
+                if acc.get("type") != "main":
+                    continue
                 currency = acc["currency"]
-                balance = float(acc["available"])
+                balance = float(acc.get("available") or acc.get("balance") or 0)
                 if balance > 0:
                     balances[currency] = balance
             return balances
