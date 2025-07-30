@@ -5,7 +5,7 @@ CONFIG = {
     "KUCOIN_API_SECRET": "473367a6-af01-48d2-8b78-2817ab879dc1",  # ✅ 新 Secret
     "KUCOIN_API_PASSPHRASE": "ilovesophia",
 
-    "SIMULATE": False,  # ✅ 真实交易已启用
+    "SIMULATE": True,  # ✅ 真实交易已启用
     "SERVER_CHAN_KEY": "SCT290772THBFAsWEtLa29M3l98qRSZ1DZ",
 
     "TRADE": {
