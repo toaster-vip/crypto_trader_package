@@ -104,10 +104,17 @@ def main():
         log("⚠️ 没有评分结果，跳过交易")
         return
 
-    top = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    top_symbols_with_scores = top[:3]
-    log(f"🔥 评分最高币种: {[s[0] for s in top_symbols_with_scores]}")
+    # 获取市场成交量数据
+    symbol_volumes = {}
+    for symbol in scores:
+        data = client.get_market_data(symbol)
+        symbol_volumes[symbol] = data.get("vol", 0)
 
+    # 同分数时用成交量辅助排序
+    top = sorted(scores.items(), key=lambda x: (x[1], symbol_volumes.get(x[0], 0)), reverse=True)
+    top_symbols_with_scores = top[:3]
+
+    log(f"🔥 评分最高币种: {[s[0] for s in top_symbols_with_scores]}")
     rebalance_portfolio(client, holdings, top_symbols_with_scores, POSITIONS_FILE)
     log("✅ 本轮交易执行完毕")
 
