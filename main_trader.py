@@ -1,5 +1,3 @@
-# main_trader.py
-
 import os
 import time
 import json
@@ -82,7 +80,7 @@ def generate_profit_report(client):
             continue
         entry_price = info["entry_price"]
         qty = float(holdings[symbol])
-        current_price = client.get_latest_price(f"{symbol}-USDT")
+        current_price = client.get_symbol_price(f"{symbol}-USDT")  # ✅ 修复：调用正确方法
         value = qty * current_price
         cost = qty * entry_price
         pnl = (value - cost) / cost * 100
