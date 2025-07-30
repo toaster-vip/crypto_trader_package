@@ -2,7 +2,7 @@
 import os
 import datetime
 from kucoin_api import KuCoinClient
-from strategy import analyze_symbol
+from strategy import get_symbol_score
 from rebalancer import rebalance_portfolio
 from notifier import send_serverchan_notification
 from config import CONFIG, LOG_DIR
@@ -28,13 +28,12 @@ def main():
 
     scores = {}
     for symbol in usdt_symbols:
-        base = symbol.replace("-USDT", "").replace("USDT", "")
-        market_data = client.get_market_data(symbol)
-        if not market_data:
-            continue
-        score = analyze_symbol(base, market_data)
-        scores[symbol] = score
-        print(f"{Fore.YELLOW}{symbol:<12} Score: {score:.3f}{Style.RESET_ALL}")
+        try:
+            score = get_symbol_score(symbol)
+            scores[symbol] = score
+            print(f"{Fore.YELLOW}{symbol:<12} Score: {score:.3f}{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{Fore.RED}[ERROR] 无法分析 {symbol}: {e}{Style.RESET_ALL}")
 
     if not scores:
         log("⚠️ 没有可用的评分结果，跳过交易。")
