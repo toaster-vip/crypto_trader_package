@@ -14,7 +14,7 @@ from config import CONFIG, LOG_DIR
 from colorama import Fore, Style, init as colorama_init
 colorama_init(autoreset=True)
 
-TEST_MODE = False
+TEST_MODE = True
 BATCH_SIZE = 50
 MAX_WORKERS = 10
 BATCH_DELAY = 2
