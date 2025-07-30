@@ -80,7 +80,7 @@ def generate_profit_report(client):
             continue
         entry_price = info["entry_price"]
         qty = float(holdings[symbol])
-        current_price = client.get_symbol_price(f"{symbol}-USDT")  # ✅ 修复：调用正确方法
+        current_price = client.get_symbol_price(f"{symbol}-USDT")
         value = qty * current_price
         cost = qty * entry_price
         pnl = (value - cost) / cost * 100
@@ -93,6 +93,8 @@ def generate_profit_report(client):
     send_serverchan_notification("📊 每日盈亏报告", content)
 
 def main():
+    start_time = time.time()  # ⏱️ 开始计时
+
     log("📈 自动交易脚本开始执行")
     client = KuCoinClient()
     holdings = client.get_account_holdings()
@@ -118,6 +120,9 @@ def main():
     if count % REPORT_INTERVAL == 0:
         log("📬 生成定期盈亏报告")
         generate_profit_report(client)
+
+    elapsed = time.time() - start_time  # ⏱️ 计算耗时
+    log(f"⏱️ 本轮运行耗时: {elapsed:.2f} 秒")
 
 if __name__ == "__main__":
     main()
