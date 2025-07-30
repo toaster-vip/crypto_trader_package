@@ -2,6 +2,7 @@
 
 import os
 import time
+import json
 import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from kucoin_api import KuCoinClient
@@ -13,87 +14,112 @@ from config import CONFIG, LOG_DIR
 from colorama import Fore, Style, init as colorama_init
 colorama_init(autoreset=True)
 
-# ✅ 是否启用测试模式（只分析前 30 个币种）
 TEST_MODE = False
-
-# ✅ 每批处理数量
 BATCH_SIZE = 50
-
-# ✅ 最大并发线程数
 MAX_WORKERS = 10
-
-# ✅ 每批之间的延迟秒数
 BATCH_DELAY = 2
+REPORT_INTERVAL = 200
+POSITIONS_FILE = os.path.join(LOG_DIR, "positions.json")
+COUNTER_FILE = os.path.join(LOG_DIR, "run_counter.txt")
 
-
-def log(message):
+def log(msg):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"{Fore.CYAN}[{timestamp}] {message}{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}[{timestamp}] {msg}{Style.RESET_ALL}")
     with open(os.path.join(LOG_DIR, "trading.log"), "a") as f:
-        f.write(f"[{timestamp}] {message}\n")
-
+        f.write(f"[{timestamp}] {msg}\n")
 
 def analyze_in_batches(symbols, max_workers=10, batch_size=50, delay_between_batches=2):
     scores = {}
     total = len(symbols)
     batch_count = (total + batch_size - 1) // batch_size
-    log(f"🚀 共需分析 {total} 个币种，将分为 {batch_count} 批，每批 {batch_size} 个，线程数={max_workers}")
-
-    start_time = time.time()
+    log(f"🚀 共需分析 {total} 个币种，将分为 {batch_count} 批")
 
     for i in range(0, total, batch_size):
         batch = symbols[i:i + batch_size]
-        log(f"📦 开始分析第 {i // batch_size + 1}/{batch_count} 批，共 {len(batch)} 个币种")
+        log(f"📦 分析第 {i // batch_size + 1}/{batch_count} 批，共 {len(batch)} 个币种")
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_symbol = {executor.submit(get_symbol_score, symbol): symbol for symbol in batch}
-
-            for future in as_completed(future_to_symbol):
-                symbol = future_to_symbol[future]
+            futures = {executor.submit(get_symbol_score, s): s for s in batch}
+            for future in as_completed(futures):
+                symbol = futures[future]
                 try:
-                    score = future.result()
-                    scores[symbol] = score
-                    print(f"{Fore.YELLOW}{symbol:<12} Score: {score:.3f}{Style.RESET_ALL}")
+                    scores[symbol] = future.result()
+                    print(f"{Fore.YELLOW}{symbol:<12} Score: {scores[symbol]:.3f}{Style.RESET_ALL}")
                 except Exception as e:
-                    print(f"{Fore.RED}[ERROR] 无法分析 {symbol}: {e}{Style.RESET_ALL}")
-
-        log(f"🌙 冷却中：等待 {delay_between_batches} 秒避免触发 KuCoin 限速...")
+                    print(f"{Fore.RED}[ERROR] 分析失败 {symbol}: {e}{Style.RESET_ALL}")
         time.sleep(delay_between_batches)
-
-    elapsed = round(time.time() - start_time, 2)
-    log(f"✅ 本轮评分完成，用时：{elapsed} 秒")
     return scores
 
+def load_json(path):
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_json(data, path):
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+def update_run_counter():
+    counter = 0
+    if os.path.exists(COUNTER_FILE):
+        with open(COUNTER_FILE, "r") as f:
+            counter = int(f.read().strip())
+    counter += 1
+    with open(COUNTER_FILE, "w") as f:
+        f.write(str(counter))
+    return counter
+
+def generate_profit_report(client):
+    positions = load_json(POSITIONS_FILE)
+    holdings = client.get_account_holdings()
+    total_cost = 0
+    total_value = 0
+    lines = []
+
+    for symbol, info in positions.items():
+        if symbol not in holdings or float(holdings[symbol]) <= 0:
+            continue
+        entry_price = info["entry_price"]
+        qty = float(holdings[symbol])
+        current_price = client.get_latest_price(f"{symbol}-USDT")
+        value = qty * current_price
+        cost = qty * entry_price
+        pnl = (value - cost) / cost * 100
+        total_cost += cost
+        total_value += value
+        lines.append(f"{symbol}: 入场 {entry_price:.4f}，现价 {current_price:.4f}，数量 {qty:.2f}，盈亏 {pnl:.2f}%")
+
+    summary = f"\n💰 当前总市值：{total_value:.2f} USDT\n💸 成本合计：{total_cost:.2f} USDT\n📊 盈亏：{(total_value - total_cost):.2f} USDT ({((total_value - total_cost)/total_cost*100 if total_cost else 0):.2f}%)"
+    content = "\n".join(lines) + summary if lines else "当前无持仓，空仓中。"
+    send_serverchan_notification("📊 每日盈亏报告", content)
 
 def main():
     log("📈 自动交易脚本开始执行")
     client = KuCoinClient()
-
     holdings = client.get_account_holdings()
     log(f"✅ 当前持仓币种: {list(holdings.keys())}")
 
-    supported_symbols = client.get_supported_symbols()
-    usdt_symbols = [s for s in supported_symbols if s.endswith("USDT")]
-
+    symbols = [s for s in client.get_supported_symbols() if s.endswith("USDT")]
     if TEST_MODE:
-        log("🧪 [TEST MODE] 只分析前 30 个 USDT 币种")
-        usdt_symbols = usdt_symbols[:30]
+        symbols = symbols[:30]
 
-    # 分批执行并发评分
-    scores = analyze_in_batches(usdt_symbols, max_workers=MAX_WORKERS, batch_size=BATCH_SIZE, delay_between_batches=BATCH_DELAY)
-
+    scores = analyze_in_batches(symbols, max_workers=MAX_WORKERS, batch_size=BATCH_SIZE, delay_between_batches=BATCH_DELAY)
     if not scores:
-        log("⚠️ 没有可用的评分结果，跳过交易。")
+        log("⚠️ 没有评分结果，跳过交易")
         return
 
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    top_symbols = [s[0] for s in sorted_scores[:3]]
+    top = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    top_symbols = [s[0] for s in top[:3]]
     log(f"🔥 评分最高币种: {top_symbols}")
 
-    rebalance_portfolio(client, holdings, top_symbols)
-
+    rebalance_portfolio(client, holdings, top_symbols, POSITIONS_FILE)
     log("✅ 本轮交易执行完毕")
 
+    count = update_run_counter()
+    if count % REPORT_INTERVAL == 0:
+        log("📬 生成定期盈亏报告")
+        generate_profit_report(client)
 
 if __name__ == "__main__":
     main()
