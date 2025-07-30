@@ -3,9 +3,8 @@ import base64
 import hmac
 import hashlib
 import requests
-import json
 
-# ✅ 来自 config.py 中的 API 配置
+# ✅ KuCoin API 配置信息
 API_KEY = "688990c9c714e80001ef1a2c"
 API_SECRET = "473367a6-af01-48d2-8b78-2817ab879dc1"
 API_PASSPHRASE = "ilovesophia"
@@ -40,15 +39,25 @@ def test_get_accounts():
     resp = requests.get(url, headers=headers)
     print(resp.json())
 
-def test_get_balance(currency="USDT"):
-    endpoint = f"/api/v1/accounts?currency={currency}"
+def test_get_balance_all(currency="USDT"):
+    endpoint = "/api/v1/accounts"
     url = API_BASE + endpoint
     headers = get_headers(endpoint)
-    print(f"▶ 获取 {currency} 余额中...")
+    print(f"▶ 检查所有账户中的 {currency} 分布...")
     resp = requests.get(url, headers=headers)
     data = resp.json()
-    print(data)
-    return data
+
+    if data.get("code") != "200000":
+        print("[❌] 获取失败:", data)
+        return
+
+    total = 0.0
+    for acc in data["data"]:
+        if acc["currency"] == currency:
+            print(f"  📌 {acc['type']} 账户: 可用 {acc['available']}")
+            total += float(acc["available"])
+
+    print(f"💰 总共可用 {currency}: {total:.4f}")
 
 def test_get_price(symbol="BTC-USDT"):
     url = f"{API_BASE}/api/v1/market/orderbook/level1?symbol={symbol}"
@@ -56,34 +65,11 @@ def test_get_price(symbol="BTC-USDT"):
     resp = requests.get(url)
     print(resp.json())
 
-def redeem_autoearn(currency="USDT", amount=None):
-    endpoint = "/api/v1/earn/account/redeem"
-    url = API_BASE + endpoint
-    body_dict = {"currency": currency}
-    if amount:
-        body_dict["redeemAmount"] = str(amount)
-
-    body = json.dumps(body_dict)
-    headers = get_headers(endpoint, method="POST", body=body)
-    print(f"⚠️ 可用 {currency} 余额为 0，尝试从 Auto Earn 自动赎回...")
-    try:
-        resp = requests.post(url, headers=headers, data=body)
-        data = resp.json()
-        if data.get("code") == "200000":
-            print(f"[✅] Auto Earn 赎回请求已提交成功！")
-        else:
-            print(f"[❌] Auto Earn 赎回失败: {data}")
-    except Exception as e:
-        print(f"[ERROR] Auto Earn 请求失败: {e}")
-
 if __name__ == "__main__":
     print("✅ KuCoin API 测试开始")
     test_get_accounts()
     print("-" * 50)
-    balance_data = test_get_balance("USDT")
-    print("-" * 50)
-    if balance_data.get("data") == []:
-        redeem_autoearn("USDT")
+    test_get_balance_all("USDT")
     print("-" * 50)
     test_get_price("BTC-USDT")
     print("✅ 测试结束")
