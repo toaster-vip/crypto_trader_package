@@ -108,7 +108,7 @@ class KuCoinClient:
             print(f"[ERROR] 下单请求失败: {e}")
             return None
             
-        def get_symbol_price(self, symbol):
+    def get_symbol_price(self, symbol):
         """
         获取某个交易对的最新成交价（如 PROM-USDT）
         """
