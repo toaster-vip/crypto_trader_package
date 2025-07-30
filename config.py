@@ -1,11 +1,9 @@
-# save1/config.py
-
 CONFIG = {
     "KUCOIN_API_KEY": "688990c9c714e80001ef1a2c",  # ✅ 新 Key
     "KUCOIN_API_SECRET": "473367a6-af01-48d2-8b78-2817ab879dc1",  # ✅ 新 Secret
     "KUCOIN_API_PASSPHRASE": "ilovesophia",
 
-    "SIMULATE": True,  # ✅ 真实交易已启用
+    "SIMULATE": True,  # ✅ 模拟交易模式
     "SERVER_CHAN_KEY": "SCT290772THBFAsWEtLa29M3l98qRSZ1DZ",
 
     "TRADE": {
@@ -20,6 +18,8 @@ CONFIG = {
         "MOMENTUM_WEIGHT": 0.2,
         "TREND_WEIGHT": 0.1
     },
+
+    "RESERVE_RATIO": 0.07,  # ✅ 保留 7% USDT 不参与买入，用于手续费、行情反转等缓冲
 
     "LOG_DIR": "/home/linuxuser/trade_logs/"
 }
