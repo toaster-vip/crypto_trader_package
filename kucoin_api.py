@@ -107,3 +107,18 @@ class KuCoinClient:
         except Exception as e:
             print(f"[ERROR] 下单请求失败: {e}")
             return None
+            
+        def get_symbol_price(self, symbol):
+        """
+        获取某个交易对的最新成交价（如 PROM-USDT）
+        """
+        url = f"{self.base_url}/api/v1/market/orderbook/level1"
+        params = {"symbol": symbol}
+        try:
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            return float(data["data"]["price"])
+        except Exception as e:
+            print(f"[ERROR] 获取价格失败 {symbol}: {e}")
+            return None
