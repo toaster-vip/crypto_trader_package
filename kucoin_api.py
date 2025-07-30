@@ -122,3 +122,17 @@ class KuCoinClient:
         except Exception as e:
             print(f"[ERROR] 获取价格失败 {symbol}: {e}")
             return None
+            
+    def get_timestamp(self):
+    	"""
+    	获取当前 KuCoin 服务器时间戳（毫秒）
+    	"""
+    	try:
+        	url = self.base_url + "/api/v1/timestamp"
+        	response = requests.get(url)
+        	response.raise_for_status()
+        	data = response.json()
+        	return int(data["data"])
+    	except Exception as e:
+        	print(f"[ERROR] 获取时间戳失败: {e}")
+        return int(time.time() * 1000)
