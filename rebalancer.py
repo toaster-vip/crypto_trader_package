@@ -72,7 +72,6 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
     # 可用 USDT
     total_usdt = current_holdings.get("USDT", 0)
     usdt_balance = total_usdt * (1 - reserve_ratio)
-
     print(f"{Fore.CYAN}💵 当前 USDT 总余额: {total_usdt:.4f}, 可用: {usdt_balance:.4f}（保留 {reserve_ratio*100:.1f}%）{Style.RESET_ALL}")
 
     if usdt_balance <= 0:
@@ -92,7 +91,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
                     json.dump(positions, f, indent=2)
                 return
 
-    # 买入历史
+    # 买入历史跟踪
     if os.path.exists(BUY_HISTORY_FILE):
         with open(BUY_HISTORY_FILE, "r") as f:
             buy_history = json.load(f)
