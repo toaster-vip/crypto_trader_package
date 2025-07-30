@@ -95,10 +95,16 @@ class KuCoinClient:
             "clientOid": str(int(time.time() * 1000)),
             "side": side,
             "symbol": symbol,
-            "type": order_type,
-            "size": str(size)
+            "type": order_type
         }
-        if price:
+
+        if order_type == "market":
+            if side == "buy":
+                body_dict["funds"] = str(size)  # 市价买单使用 funds（USDT金额）
+            else:
+                body_dict["size"] = str(size)   # 市价卖单使用 size（币数量）
+        else:
+            body_dict["size"] = str(size)
             body_dict["price"] = str(price)
 
         body = json.dumps(body_dict)
@@ -107,12 +113,13 @@ class KuCoinClient:
             response = requests.post(url, headers=headers, data=body)
             result = response.json()
             if result.get("code") == "200000":
+                print(f"[✅] 下单成功（{side} {symbol}）: {result['data']['orderId']}")
                 return result["data"]["orderId"]
             else:
                 print(f"[ERROR] 下单失败: {result}")
                 return None
         except Exception as e:
-            print(f"[ERROR] 下单请求失败: {e}")
+            print(f"[ERROR] 下单请求异常: {e}")
             return None
 
     def get_symbol_price(self, symbol):
