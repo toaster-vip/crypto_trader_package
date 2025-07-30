@@ -1,17 +1,14 @@
 # strategy.py
+
 import time
 import numpy as np
 import pandas as pd
 import requests
-from threading import Lock
 from config import STRATEGY
-
-# 全局锁，用于防止线程池并发触发 KuCoin 限速
-klines_lock = Lock()
 
 def get_klines(symbol, interval='1hour', limit=100, max_retries=3):
     """
-    获取 KuCoin 历史K线数据（限速 + 自动重试 + 防429）
+    获取 KuCoin 历史K线数据（无锁 + 自限速 + 重试）
     """
     url = "https://api.kucoin.com/api/v1/market/candles"
     params = {
@@ -20,33 +17,33 @@ def get_klines(symbol, interval='1hour', limit=100, max_retries=3):
     }
 
     for attempt in range(max_retries):
-        with klines_lock:
-            time.sleep(0.2)  # 控制访问频率（单线程限速 5次/秒）
-            try:
-                resp = requests.get(url, params=params)
-                if resp.status_code == 429:
-                    wait_time = 2 ** (attempt + 1)
-                    print(f"[WARN] 请求过快（429），等待 {wait_time}s 重试第 {attempt+1}/{max_retries} 次：{symbol}")
-                    time.sleep(wait_time)
-                    continue
+        time.sleep(0.15)  # 线程内部延时，不阻塞其他线程
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            if resp.status_code == 429:
+                wait_time = 2 ** (attempt + 1)
+                print(f"[WARN] 请求过快（429），等待 {wait_time}s 重试第 {attempt+1}/{max_retries} 次：{symbol}")
+                time.sleep(wait_time)
+                continue
 
-                resp.raise_for_status()
-                candles = resp.json().get("data", [])
-                if not candles:
-                    print(f"[WARN] 无K线数据：{symbol}")
-                    return None
+            resp.raise_for_status()
+            candles = resp.json().get("data", [])
+            if not candles:
+                print(f"[WARN] 无K线数据：{symbol}")
+                return None
 
-                df = pd.DataFrame(candles, columns=['t', 'o', 'c', 'h', 'l', 'v', 'turnover'])
-                df = df.sort_values(by='t')
-                df['close'] = df['c'].astype(float)
-                return df
+            df = pd.DataFrame(candles, columns=['t', 'o', 'c', 'h', 'l', 'v', 'turnover'])
+            df = df.sort_values(by='t')
+            df['close'] = df['c'].astype(float)
+            return df
 
-            except Exception as e:
-                print(f"[ERROR] 获取K线失败 {symbol}: {e}")
-                time.sleep(1)
+        except Exception as e:
+            print(f"[ERROR] 获取K线失败 {symbol}: {e}")
+            time.sleep(1)
 
     print(f"[ERROR] 多次重试失败，放弃：{symbol}")
     return None
+
 
 # === 策略函数 ===
 
@@ -93,7 +90,8 @@ def score_momentum(df):
         return -1
     return 0
 
-# === 综合评分入口 ===
+
+# === 综合评分 ===
 
 def get_symbol_score(symbol):
     df = get_klines(symbol)
@@ -116,6 +114,7 @@ def get_symbol_score(symbol):
     print(f"📊 策略评分 {symbol}: {scores} ➜ 总分: {round(total, 2)}")
     return round(total, 2)
 
+
 # === 交易辅助判断 ===
 
 def should_sell(score, threshold=0.2):
@@ -131,11 +130,12 @@ def check_take_profit_stop_loss(entry_price, current_price, take_profit=0.045, s
         return 'stop_loss'
     return None
 
-# === 外部调度使用建议 ===
+
+# === 外部包装器：计时器 + 冷却 ===
 
 def wrap_with_timing_and_cooldown(fn):
     """
-    用于包裹外部并发分析主循环：显示耗时 + cooldown 保护
+    包裹主分析函数：添加计时器 + 冷却保护
     """
     def wrapper(*args, **kwargs):
         print(f"\n⏱️ 开始全币种评分分析...")
