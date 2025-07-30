@@ -185,6 +185,28 @@ def score_sar(df, af_step=0.02, af_max=0.2):
         return -1
     return 0
 
+def score_bollinger(df, period=20, num_std=2):
+    close = df['close']
+    ma = close.rolling(period).mean()
+    std = close.rolling(period).std()
+    upper = ma + num_std * std
+    lower = ma - num_std * std
+    if close.iloc[-1] > upper.iloc[-1]:
+        return 1
+    elif close.iloc[-1] < lower.iloc[-1]:
+        return -1
+    return 0
+
+def score_volume_spike(df, window=20, spike_threshold=2.0):
+    recent_volume = df['volume'].iloc[-1]
+    avg_volume = df['volume'].rolling(window).mean().iloc[-2]
+    if avg_volume == 0:
+        return 0
+    ratio = recent_volume / avg_volume
+    if ratio > spike_threshold:
+        return 1
+    return 0
+
 # === 综合评分 ===
 
 def get_symbol_score(symbol):
@@ -202,7 +224,9 @@ def get_symbol_score(symbol):
         "obv": score_obv(df),
         "cci": score_cci(df),
         "kdj": score_kdj(df),
-        "sar": score_sar(df)
+        "sar": score_sar(df),
+        "bollinger": score_bollinger(df),
+        "volume": score_volume_spike(df)
     }
 
     total = 0
@@ -213,7 +237,7 @@ def get_symbol_score(symbol):
     print(f"📊 策略评分 {symbol}: {scores} ➜ 总分: {round(total, 2)}")
     return round(total, 2)
 
-# === 外部包装器：计时器 + 冷却 ===
+# === 包装器 ===
 
 def wrap_with_timing_and_cooldown(fn):
     def wrapper(*args, **kwargs):
