@@ -44,6 +44,12 @@ CONFIG = {
         "SCORE_DIFF_THRESHOLD": 0.13,     # 新推荐币分数比当前币高13%才调仓，降低换手率
         "REQUIRE_CONSISTENT_ROUNDS": 2    # 新币需连续2轮进Top再买入，过滤假突破
     },
+    
+    "SIM_START_BALANCE": 100,
+    "FEE": {
+        "MAKER": 0.001,
+        "TAKER": 0.001
+    },
 
     # ====== 批量调度与实盘运行优化 ======
     "RUN_MODE": {
