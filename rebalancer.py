@@ -10,6 +10,7 @@ SCORE_DIFF_THRESHOLD = 0.10
 REQUIRE_CONSISTENT_ROUNDS = 2
 
 def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_file):
+    print(f"[DEBUG] 🔄 开始执行 rebalance_portfolio()")
     simulate = CONFIG["SIMULATE"]
     fee_rate = 0.001
     take_profit = CONFIG["TRADE"]["TAKE_PROFIT"]
@@ -21,6 +22,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
     top_symbols = [s for s, _ in recommended_tuples[:3]]
 
     # 加载历史持仓
+    print("[DEBUG] 读取历史持仓记录")
     if os.path.exists(positions_file):
         with open(positions_file, "r") as f:
             positions = json.load(f)
@@ -28,16 +30,19 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
         positions = {}
 
     # 止盈/止损逻辑
+    print("[DEBUG] 执行止盈/止损逻辑")
     for symbol, info in positions.copy().items():
         if symbol not in current_holdings:
             continue
         full_symbol = f"{symbol}-USDT"
         qty = float(current_holdings[symbol])
-        entry_price = info["entry_price"]
         current_price = client.get_symbol_price(full_symbol)
+        entry_price = info["entry_price"]
         if not current_price:
+            print(f"[DEBUG] 无法获取价格 {full_symbol}")
             continue
         pnl = (current_price - entry_price) / entry_price
+        print(f"[DEBUG] 检查 {symbol} PnL: {pnl:.2%}")
         if pnl >= take_profit:
             print(f"{Fore.MAGENTA}🎯 止盈卖出 {symbol} 盈利 {pnl:.2%}{Style.RESET_ALL}")
         elif pnl <= stop_loss:
@@ -48,7 +53,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
             client.place_order(full_symbol, "sell", size=str(qty))
         positions.pop(symbol, None)
 
-    # 👉 Debug 当前真实持仓币种评分对照
+    # 输出当前持仓和推荐对比
     print(f"{Fore.MAGENTA}[DEBUG] 当前真实持仓币种评分对照：{Style.RESET_ALL}")
     for symbol in current_holdings:
         if symbol == "USDT":
@@ -57,7 +62,8 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
         score = recommended_scores.get(full, "N/A")
         print(f"{Fore.MAGENTA}- {full}: 评分 = {score}{Style.RESET_ALL}")
 
-    # 卖出不再推荐的币
+    # 卖出非优先币种
+    print("[DEBUG] 卖出非优先币种逻辑执行中")
     for symbol in current_holdings:
         if symbol == "USDT":
             continue
@@ -72,13 +78,14 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
             if current_score >= min_required:
                 print(f"{Fore.LIGHTBLACK_EX}🔒 保留当前币种 {symbol}，分数相差不大（{current_score:.4f} vs {min_required:.4f}）{Style.RESET_ALL}")
                 continue
+        print(f"[DEBUG] 准备卖出非推荐币 {symbol}")
         if symbol in positions:
             print(f"{Fore.LIGHTBLACK_EX}🧹 卖出非优先币种 {symbol}{Style.RESET_ALL}")
             if not simulate:
                 client.place_order(full, "sell", size=str(current_holdings[symbol]))
             positions.pop(symbol, None)
 
-    # 可用 USDT
+    # 检查 USDT 可用余额
     total_usdt = current_holdings.get("USDT", 0)
     usdt_balance = total_usdt * (1 - reserve_ratio)
     print(f"{Fore.CYAN}💵 当前 USDT 总余额: {total_usdt:.4f}, 可用: {usdt_balance:.4f}（保留 {reserve_ratio*100:.1f}%）{Style.RESET_ALL}")
@@ -100,7 +107,8 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
                     json.dump(positions, f, indent=2)
                 return
 
-    # 买入历史跟踪
+    # 加载买入历史
+    print("[DEBUG] 加载买入历史 buy_history.json")
     if os.path.exists(BUY_HISTORY_FILE):
         with open(BUY_HISTORY_FILE, "r") as f:
             buy_history = json.load(f)
@@ -113,12 +121,14 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
         if s not in recommended_symbols:
             buy_history[s] = 0
 
-    # 动态分配
+    # 动态买入逻辑
+    print("[DEBUG] 执行动态买入逻辑")
     total_score = sum([recommended_scores[s] for s in top_symbols])
     print(f"{Fore.CYAN}📊 Top评分币种总分: {total_score:.4f}{Style.RESET_ALL}")
     for s in top_symbols:
         base = s.replace("-USDT", "")
         score = recommended_scores[s]
+        print(f"[DEBUG] 处理 {s}: 当前评分 {score}")
         if base in current_holdings:
             print(f"{Fore.YELLOW}⏸️ 跳过已有持仓 {base}{Style.RESET_ALL}")
             continue
@@ -140,6 +150,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
             continue
 
         if not simulate:
+            print(f"[DEBUG] 执行买入 {s} 数量 {qty}")
             client.place_order(s, "buy", size=str(qty))
 
         positions[base] = {
@@ -151,3 +162,5 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
         json.dump(positions, f, indent=2)
     with open(BUY_HISTORY_FILE, "w") as f:
         json.dump(buy_history, f, indent=2)
+
+    print(f"[DEBUG] ✅ rebalance_portfolio() 执行完毕")
