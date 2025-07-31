@@ -7,18 +7,16 @@ import json
 from config import CONFIG
 
 
-# kucoin_api.py
-
-from config import CONFIG
-
 class KuCoinClient:
     def __init__(self):
         self.api_key = CONFIG["KUCOIN_API_KEY"]
         self.api_secret = CONFIG["KUCOIN_API_SECRET"]
         self.passphrase = CONFIG["KUCOIN_API_PASSPHRASE"]
         self.base_url = "https://api.kucoin.com"
+        self.symbol_limits_cache = {}
         print("🔑 [KuCoinClient] 使用的 KuCoin API KEY:", self.api_key)
         print("📁 [KuCoinClient] config.py 加载成功")
+        self._init_symbol_limits_cache()
 
     def _get_headers(self, method, endpoint, body=""):
         now = str(int(time.time() * 1000))
@@ -38,6 +36,26 @@ class KuCoinClient:
             "KC-API-KEY-VERSION": "2",
             "Content-Type": "application/json"
         }
+
+    def _init_symbol_limits_cache(self):
+        print("[INFO] ⏳ 正在加载所有交易对限制信息...")
+        try:
+            url = self.base_url + "/api/v1/symbols"
+            response = requests.get(url)
+            data = response.json()
+            for item in data.get("data", []):
+                if item["enableTrading"]:
+                    self.symbol_limits_cache[item["symbol"]] = {
+                        "minFunds": float(item.get("minFunds", 0)),
+                        "minSize": float(item.get("baseMinSize", 0)),
+                        "maxSize": float(item.get("baseMaxSize", 1e10))
+                    }
+            print(f"[INFO] ✅ 已缓存 {len(self.symbol_limits_cache)} 个交易对限制参数")
+        except Exception as e:
+            print(f"[ERROR] 初始化 symbol 限制缓存失败: {e}")
+
+    def get_symbol_limits(self, symbol):
+        return self.symbol_limits_cache.get(symbol, None)
 
     def get_account_holdings(self):
         endpoint = "/api/v1/accounts"
@@ -60,20 +78,7 @@ class KuCoinClient:
             return {}
 
     def get_supported_symbols(self):
-        url = self.base_url + "/api/v1/symbols"
-        try:
-            response = requests.get(url)
-            data = response.json()
-            pairs = data.get("data", [])
-            usdt_symbols = [
-                p["symbol"]
-                for p in pairs
-                if p["quoteCurrency"] == "USDT" and p["enableTrading"]
-            ]
-            return usdt_symbols
-        except Exception as e:
-            print(f"[ERROR] 获取交易对失败: {e}")
-            return []
+        return list(self.symbol_limits_cache.keys())
 
     def get_market_data(self, symbol):
         url = self.base_url + f"/api/v1/market/stats?symbol={symbol}"
@@ -81,7 +86,6 @@ class KuCoinClient:
             response = requests.get(url)
             data = response.json()
             ticker = data.get("data", {})
-
             return {
                 "price": float(ticker.get("last", 0.0)),
                 "open": float(ticker.get("open", 0.0)),
@@ -106,9 +110,9 @@ class KuCoinClient:
 
         if order_type == "market":
             if side == "buy":
-                body_dict["funds"] = str(size)  # 市价买单使用 funds（USDT金额）
+                body_dict["funds"] = str(size)
             else:
-                body_dict["size"] = str(size)   # 市价卖单使用 size（币数量）
+                body_dict["size"] = str(size)
         else:
             body_dict["size"] = str(size)
             body_dict["price"] = str(price)
@@ -159,7 +163,6 @@ class KuCoinClient:
         }
         if amount:
             body_dict["redeemAmount"] = str(amount)
-
         body = json.dumps(body_dict)
         headers = self._get_headers("POST", endpoint, body)
         try:
@@ -174,9 +177,8 @@ class KuCoinClient:
         except Exception as e:
             print(f"[ERROR] Auto Earn 请求失败: {e}")
             return False
-            
+
     def get_trade_account_balance(self, currency="USDT"):
-        """获取交易账户中指定币种的可用余额"""
         endpoint = "/api/v1/accounts"
         url = self.base_url + endpoint
         headers = self._get_headers("GET", endpoint)
@@ -195,7 +197,6 @@ class KuCoinClient:
             return 0.0
 
     def transfer_to_trade_account(self, currency="USDT", amount=1.0):
-        """将主账户资金转入交易账户"""
         endpoint = "/api/v2/accounts/inner-transfer"
         url = self.base_url + endpoint
         body_dict = {
@@ -218,7 +219,4 @@ class KuCoinClient:
                 return False
         except Exception as e:
             print(f"[ERROR] 转账请求异常: {e}")
-            return False    
-            
-            
-        
+            return False
