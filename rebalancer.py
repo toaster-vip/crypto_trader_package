@@ -122,7 +122,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
         if s not in recommended_scores:
             buy_history[s] = 0
 
-    # 动态买入逻辑（已加入资金与数量判断）
+    # 动态买入逻辑（已加入资金与数量判断 + symbol 限制）
     total_score = sum([recommended_scores[s] for s in top_symbols])
     for s in top_symbols:
         base = s.replace("-USDT", "")
@@ -136,15 +136,29 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
             continue
         allocation = (score / total_score) * available_usdt
 
-        # ✅ 新增判断逻辑
         if allocation < 5:
             print(f"{Fore.YELLOW}⚠️ 分配资金过少 {allocation:.2f}，跳过 {base}{Style.RESET_ALL}")
             continue
 
-        qty = round((allocation * (1 - fee_rate)) / price, 4)
+        qty = round((allocation * (1 - fee_rate)) / price, 6)
 
-        if qty < 0.0001 or qty > 1e8:
-            print(f"{Fore.YELLOW}⚠️ 买入数量异常（{qty}），跳过 {base}{Style.RESET_ALL}")
+        # 🔍 获取 symbol 限制信息（如最小交易金额、最小/最大数量）
+        symbol_limits = client.get_symbol_limits(s)
+        if symbol_limits:
+            min_funds = float(symbol_limits.get("minFunds", 0))
+            min_size = float(symbol_limits.get("minSize", 0))
+            max_size = float(symbol_limits.get("maxSize", 1e10))
+        else:
+            min_funds = 0
+            min_size = 0
+            max_size = 1e10
+
+        # ✅ 应用限制判断
+        if allocation < min_funds:
+            print(f"{Fore.YELLOW}⚠️ 分配金额 {allocation:.2f} 小于最小下单金额 {min_funds}，跳过 {base}{Style.RESET_ALL}")
+            continue
+        if qty < min_size or qty > max_size:
+            print(f"{Fore.YELLOW}⚠️ 数量 {qty} 不满足限制 [{min_size} ~ {max_size}]，跳过 {base}{Style.RESET_ALL}")
             continue
 
         required_usdt = qty * price * (1 + fee_rate)
