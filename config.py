@@ -1,14 +1,14 @@
 CONFIG = {
-    "KUCOIN_API_KEY": "688990c9c714e80001ef1a2c",  # ✅ 新 Key
-    "KUCOIN_API_SECRET": "473367a6-af01-48d2-8b78-2817ab879dc1",  # ✅ 新 Secret
+    "KUCOIN_API_KEY": "688990c9c714e80001ef1a2c",
+    "KUCOIN_API_SECRET": "473367a6-af01-48d2-8b78-2817ab879dc1",
     "KUCOIN_API_PASSPHRASE": "ilovesophia",
 
-    "SIMULATE": True,  # ✅ 模拟交易模式
+    "SIMULATE": True,
     "SERVER_CHAN_KEY": "SCT290772THBFAsWEtLa29M3l98qRSZ1DZ",
 
     "TRADE": {
-        "TAKE_PROFIT": 0.045,   # 止盈 +4.5%
-        "STOP_LOSS": -0.025     # 止损 -2.5%
+        "TAKE_PROFIT": 0.045,
+        "STOP_LOSS": -0.025
     },
 
     "STRATEGY": {
@@ -26,9 +26,14 @@ CONFIG = {
         "VOLUME_WEIGHT": 0.05
     },
 
-    "RESERVE_RATIO": 0.07,  # ✅ 保留 7% USDT 不参与买入，用于手续费、行情反转等缓冲
+    "RESERVE_RATIO": 0.07,
+    "LOG_DIR": "/home/linuxuser/trade_logs/",
 
-    "LOG_DIR": "/home/linuxuser/trade_logs/"
+    "REBALANCE": {
+        "HOLD_THRESHOLD_RANK": 10,         # 前10名以内持仓继续持有
+        "SCORE_DIFF_THRESHOLD": 0.10,      # 分数差异不足10%，继续持有
+        "REQUIRE_CONSISTENT_ROUNDS": 2     # 连续两轮出现才买入
+    }
 }
 
 # 保持兼容性（旧模块使用）
