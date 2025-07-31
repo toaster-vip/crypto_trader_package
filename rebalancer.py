@@ -124,7 +124,8 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
 
         print(f"{Fore.LIGHTGREEN_EX}📈 买入 {base}: 分配={allocation:.2f} USDT（市价单）{Style.RESET_ALL}")
         if not simulate:
-            resp = client.place_order(s, "buy", size=None, funds=str(allocation))  # ✅ 传 funds
+            resp = client.place_order(s, "buy", size=xxx)
+            #resp = client.place_order(s, "buy", size=None, funds=str(allocation))  # ✅ 传 funds
             if not resp:
                 print(f"{Fore.RED}[ERROR] 下单失败，跳过 {base}{Style.RESET_ALL}")
                 continue
