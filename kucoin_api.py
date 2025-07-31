@@ -174,3 +174,51 @@ class KuCoinClient:
         except Exception as e:
             print(f"[ERROR] Auto Earn 请求失败: {e}")
             return False
+            
+            def get_trade_account_balance(self, currency="USDT"):
+        """获取交易账户中指定币种的可用余额"""
+        endpoint = "/api/v1/accounts"
+        url = self.base_url + endpoint
+        headers = self._get_headers("GET", endpoint)
+        try:
+            response = requests.get(url, headers=headers)
+            data = response.json()
+            for acc in data.get("data", []):
+                if acc.get("type") == "trade" and acc.get("currency") == currency:
+                    balance = float(acc.get("available") or 0)
+                    print(f"[🔍] 交易账户 {currency} 可用余额: {balance}")
+                    return balance
+            print(f"[WARN] 未找到交易账户 {currency} 余额信息")
+            return 0.0
+        except Exception as e:
+            print(f"[ERROR] 获取交易账户余额失败: {e}")
+            return 0.0
+
+    def transfer_to_trade_account(self, currency="USDT", amount=1.0):
+        """将主账户资金转入交易账户"""
+        endpoint = "/api/v2/accounts/inner-transfer"
+        url = self.base_url + endpoint
+        body_dict = {
+            "clientOid": str(int(time.time() * 1000)),
+            "currency": currency,
+            "from": "main",
+            "to": "trade",
+            "amount": str(amount)
+        }
+        body = json.dumps(body_dict)
+        headers = self._get_headers("POST", endpoint, body)
+        try:
+            response = requests.post(url, headers=headers, data=body)
+            data = response.json()
+            if data.get("code") == "200000":
+                print(f"[✅] 已从主账户转入 {amount} {currency} 到交易账户")
+                return True
+            else:
+                print(f"[ERROR] 转账失败: {data}")
+                return False
+        except Exception as e:
+            print(f"[ERROR] 转账请求异常: {e}")
+            return False    
+            
+            
+        
