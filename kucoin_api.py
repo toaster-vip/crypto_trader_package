@@ -7,12 +7,18 @@ import json
 from config import CONFIG
 
 
+# kucoin_api.py
+
+from config import CONFIG
+
 class KuCoinClient:
     def __init__(self):
         self.api_key = CONFIG["KUCOIN_API_KEY"]
         self.api_secret = CONFIG["KUCOIN_API_SECRET"]
         self.passphrase = CONFIG["KUCOIN_API_PASSPHRASE"]
         self.base_url = "https://api.kucoin.com"
+        print("🔑 [KuCoinClient] 使用的 KuCoin API KEY:", self.api_key)
+        print("📁 [KuCoinClient] config.py 加载成功")
 
     def _get_headers(self, method, endpoint, body=""):
         now = str(int(time.time() * 1000))
