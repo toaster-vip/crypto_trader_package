@@ -18,6 +18,9 @@ def get_klines(symbol, interval='1hour', limit=100, max_retries=3):
             print(f"[⏳] 正在获取K线数据：{symbol}（第 {attempt+1} 次尝试）")
             resp = requests.get(url, params=params, timeout=10)
 
+            print(f"[DEBUG] 请求 URL: {resp.url}")
+            print(f"[DEBUG] 响应状态码: {resp.status_code}")
+
             if resp.status_code == 429:
                 wait_time = 2 ** (attempt + 1)
                 print(f"[⚠️] 请求过快（429），等待 {wait_time}s 后重试：{symbol}")
@@ -34,6 +37,8 @@ def get_klines(symbol, interval='1hour', limit=100, max_retries=3):
             if not candles or not isinstance(candles, list):
                 print(f"[⚠️] 无效K线数据：{symbol}，返回：{data}")
                 return None
+
+            print(f"[DEBUG] 获取到 {len(candles)} 条K线数据：{symbol}")
 
             df = pd.DataFrame(candles, columns=['t', 'o', 'c', 'h', 'l', 'v', 'turnover'])
             df = df.sort_values(by='t')
@@ -54,7 +59,7 @@ def get_klines(symbol, interval='1hour', limit=100, max_retries=3):
 
     print(f"[❌] 多次重试失败，放弃：{symbol}")
     return None
-
+    
 # === 策略函数（打分范围为 -1.0 ~ +1.0） ===
 
 def score_rsi(df):
