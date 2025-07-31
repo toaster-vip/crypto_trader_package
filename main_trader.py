@@ -15,7 +15,7 @@ print("🔑 当前配置中的 API_KEY:", CONFIG["KUCOIN_API_KEY"])
 
 colorama_init(autoreset=True)
 
-TEST_MODE = True
+TEST_MODE = False
 BATCH_SIZE = 50
 MAX_WORKERS = 10
 BATCH_DELAY = 1
