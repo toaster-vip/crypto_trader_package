@@ -1,10 +1,15 @@
-CONFIG = {
-    "KUCOIN_API_KEY": "688990c9c714e80001ef1a2c",
-    "KUCOIN_API_SECRET": "473367a6-af01-48d2-8b78-2817ab879dc1",
-    "KUCOIN_API_PASSPHRASE": "ilovesophia",
+import os
 
+CONFIG = {
+    # ✅ 敏感信息：使用环境变量注入
+    "KUCOIN_API_KEY": os.getenv("KUCOIN_API_KEY"),
+    "KUCOIN_API_SECRET": os.getenv("KUCOIN_API_SECRET"),
+    "KUCOIN_API_PASSPHRASE": os.getenv("KUCOIN_API_PASSPHRASE"),
+    "SERVER_CHAN_KEY": os.getenv("SERVER_CHAN_KEY"),
+
+    # ✅ 直接写入的控制项
     "SIMULATE": False,
-    "SERVER_CHAN_KEY": "SCT290772THBFAsWEtLa29M3l98qRSZ1DZ",
+    "LOG_DIR": "/home/linuxuser/trade_logs/",
 
     "TRADE": {
         "TAKE_PROFIT": 0.045,
@@ -27,24 +32,23 @@ CONFIG = {
     },
 
     "RESERVE_RATIO": 0.07,
-    "LOG_DIR": "/home/linuxuser/trade_logs/",
 
     "REBALANCE": {
-        "HOLD_THRESHOLD_RANK": 10,         # 前10名以内持仓继续持有
-        "SCORE_DIFF_THRESHOLD": 0.10,      # 分数差异不足10%，继续持有
-        "REQUIRE_CONSISTENT_ROUNDS": 2     # 连续两轮出现才买入
+        "HOLD_THRESHOLD_RANK": 10,
+        "SCORE_DIFF_THRESHOLD": 0.10,
+        "REQUIRE_CONSISTENT_ROUNDS": 2
     },
 
     "RUN_MODE": {
-        "TEST_MODE": False,         # ✅ 设置 True 表示只分析前 30 个币
-        "BATCH_SIZE": 50,          # 每批处理数量
-        "MAX_WORKERS": 10,         # 并发线程数
-        "BATCH_DELAY": 1,          # 每批之间的延迟秒数
-        "REPORT_INTERVAL": 200     # 每多少轮发送盈亏报告
+        "TEST_MODE": False,
+        "BATCH_SIZE": 50,
+        "MAX_WORKERS": 10,
+        "BATCH_DELAY": 1,
+        "REPORT_INTERVAL": 200
     }
 }
 
-# 保持兼容性（旧模块使用）
+# 保持兼容性
 KUCOIN_API_KEY = CONFIG["KUCOIN_API_KEY"]
 KUCOIN_API_SECRET = CONFIG["KUCOIN_API_SECRET"]
 KUCOIN_API_PASSPHRASE = CONFIG["KUCOIN_API_PASSPHRASE"]
