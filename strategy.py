@@ -6,12 +6,6 @@ import pandas as pd
 import requests
 from config import STRATEGY
 
-import time
-import numpy as np
-import pandas as pd
-import requests
-from config import STRATEGY
-
 def get_klines(symbol, interval='1hour', limit=100, max_retries=3):
     url = "https://api.kucoin.com/api/v1/market/candles"
     params = {
