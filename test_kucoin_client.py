@@ -11,6 +11,11 @@ def test_kucoin_client():
     holdings = client.get_account_holdings()
     print(holdings)
 
+    # ✅ 1.1 获取主账户中 USDT 的可用余额
+    print("\n[1.1] 获取主账户中 USDT 可用余额：")
+    usdt_balance = holdings.get("USDT", 0.0)
+    print(f"当前 USDT 余额：{usdt_balance} USDT")
+
     # 2. 获取支持的 USDT 交易对
     print("\n[2] 获取支持交易的 USDT 对：")
     symbols = client.get_supported_symbols()
