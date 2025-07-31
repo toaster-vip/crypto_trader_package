@@ -5,9 +5,10 @@ from config import CONFIG
 from colorama import Fore, Style
 
 BUY_HISTORY_FILE = os.path.join(CONFIG["LOG_DIR"], "buy_history.json")
-HOLD_THRESHOLD_RANK = 10
-SCORE_DIFF_THRESHOLD = 0.10
-REQUIRE_CONSISTENT_ROUNDS = 2
+REBALANCE_CFG = CONFIG["REBALANCE"]
+HOLD_THRESHOLD_RANK = REBALANCE_CFG["HOLD_THRESHOLD_RANK"]
+SCORE_DIFF_THRESHOLD = REBALANCE_CFG["SCORE_DIFF_THRESHOLD"]
+REQUIRE_CONSISTENT_ROUNDS = REBALANCE_CFG["REQUIRE_CONSISTENT_ROUNDS"]
 
 def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_file):
     print(f"[DEBUG] 🔄 开始执行 rebalance_portfolio()")
@@ -15,12 +16,13 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
     fee_rate = 0.001
     take_profit = CONFIG["TRADE"]["TAKE_PROFIT"]
     stop_loss = CONFIG["TRADE"]["STOP_LOSS"]
-    reserve_ratio = CONFIG.get("RESERVE_RATIO", 0.07)
+    reserve_ratio = CONFIG["RESERVE_RATIO"]
 
     recommended_symbols = [s for s, _ in recommended_tuples]
     recommended_scores = {s: sc for s, sc in recommended_tuples}
     top_symbols = [s for s, _ in recommended_tuples[:3]]
 
+    print(f"[DEBUG] ✅ rebalance_portfolio() 执行完毕")
     # 加载历史持仓
     print("[DEBUG] 读取历史持仓记录")
     if os.path.exists(positions_file):
