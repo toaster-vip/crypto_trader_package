@@ -92,6 +92,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
 
     if usdt_balance <= 0:
         print(f"{Fore.YELLOW}⚠️ 可用 USDT 不足，尝试从 Auto Earn 自动赎回...{Style.RESET_ALL}")
+        """
         if not simulate:
             redeemed = client.redeem_autoearn("USDT", amount=None)
             if redeemed:
@@ -106,6 +107,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
                 with open(positions_file, "w") as f:
                     json.dump(positions, f, indent=2)
                 return
+        """
 
     # 加载买入历史
     print("[DEBUG] 加载买入历史 buy_history.json")
