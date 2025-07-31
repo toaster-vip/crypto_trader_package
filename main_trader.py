@@ -105,13 +105,26 @@ def main():
         return
 
     # 获取市场成交量数据
+    log("📦 开始获取所有评分币种的市场成交量...")
     symbol_volumes = {}
     for symbol in scores:
-        data = client.get_market_data(symbol)
-        symbol_volumes[symbol] = data.get("vol", 0)
+        try:
+            data = client.get_market_data(symbol)
+            symbol_volumes[symbol] = data.get("vol", 0)
+            print(f"[成交量] {symbol}: {symbol_volumes[symbol]}")
+        except Exception as e:
+            print(f"[ERROR] 获取 {symbol} 成交量失败: {e}")
+            symbol_volumes[symbol] = 0
 
-    # 同分数时用成交量辅助排序
+    log("📊 开始排序 top N 币种评分（含成交量辅助）...")
     top = sorted(scores.items(), key=lambda x: (x[1], symbol_volumes.get(x[0], 0)), reverse=True)
+    top_symbols_with_scores = top[:3]
+    print("✅ 排序完成，前3名为：", top_symbols_with_scores)
+
+    log(f"🔥 评分最高币种: {[s[0] for s in top_symbols_with_scores]}")
+    log("🧠 调仓逻辑开始执行 rebalance_portfolio()")
+    rebalance_portfolio(client, holdings, top_symbols_with_scores, POSITIONS_FILE)
+    log("✅ 调仓逻辑执行完毕")
     top_symbols_with_scores = top[:3]
 
     log(f"🔥 评分最高币种: {[s[0] for s in top_symbols_with_scores]}")
