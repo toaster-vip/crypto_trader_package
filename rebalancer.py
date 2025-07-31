@@ -122,7 +122,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
         if s not in recommended_scores:
             buy_history[s] = 0
 
-    # 动态买入逻辑
+    # 动态买入逻辑（已加入资金与数量判断）
     total_score = sum([recommended_scores[s] for s in top_symbols])
     for s in top_symbols:
         base = s.replace("-USDT", "")
@@ -135,9 +135,23 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
         if not price:
             continue
         allocation = (score / total_score) * available_usdt
-        qty = round((allocation * (1 - fee_rate)) / price, 4)
-        if qty <= 0:
+
+        # ✅ 新增判断逻辑
+        if allocation < 5:
+            print(f"{Fore.YELLOW}⚠️ 分配资金过少 {allocation:.2f}，跳过 {base}{Style.RESET_ALL}")
             continue
+
+        qty = round((allocation * (1 - fee_rate)) / price, 4)
+
+        if qty < 0.0001 or qty > 1e8:
+            print(f"{Fore.YELLOW}⚠️ 买入数量异常（{qty}），跳过 {base}{Style.RESET_ALL}")
+            continue
+
+        required_usdt = qty * price * (1 + fee_rate)
+        if required_usdt > available_usdt:
+            print(f"{Fore.YELLOW}⚠️ 超出资金余额 {required_usdt:.2f} > {available_usdt:.2f}，跳过 {base}{Style.RESET_ALL}")
+            continue
+
         print(f"{Fore.LIGHTGREEN_EX}📈 买入 {base}: 分配={allocation:.2f}, 数量={qty}{Style.RESET_ALL}")
         if not simulate:
             client.place_order(s, "buy", size=str(qty))
