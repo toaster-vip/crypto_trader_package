@@ -18,7 +18,7 @@ else:
     print("[系统] 运行于【真实KuCoin账户】模式，所有资金与持仓为实盘。")
 
 from strategy import score_symbols
-from notifier import send_wechat_server_chan  # ← 完全对应你git里的函数名
+from notifier import send_serverchan_notification  # <- 必须用这个名字
 
 def main():
     start_time = time.time()
@@ -41,8 +41,8 @@ def main():
         place_order=place_order
     )
 
-    # 4. 示例推送（如果需要）
-    # send_wechat_server_chan("本轮调仓报告", report_content)
+    # 4. 示例推送（如需要，可以取消注释）
+    # send_serverchan_notification("本轮调仓报告", report_content)
 
     elapsed = time.time() - start_time
     print(f"[主控] 本轮运行完成，耗时{elapsed:.2f}秒")
