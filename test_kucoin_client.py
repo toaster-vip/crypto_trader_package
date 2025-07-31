@@ -31,6 +31,16 @@ def test_kucoin_client():
     print(f"\n[4] 获取当前价格：{test_symbol}")
     price = client.get_symbol_price(test_symbol)
     print(f"{test_symbol} 当前价格: {price}")
+    
+    client = KuCoinClient()
+	main_usdt = client.get_account_holdings().get("USDT", 0)
+	print(f"主账户 USDT: {main_usdt}")
+
+	trade_usdt = client.get_trade_account_balance("USDT")
+	print(f"交易账户 USDT: {trade_usdt}")
+
+	if main_usdt > 1:
+    	client.transfer_to_trade_account("USDT", 1.0)
 
     print("\n✅ 所有 API 测试完成")
 
