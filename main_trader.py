@@ -15,11 +15,14 @@ print("🔑 当前配置中的 API_KEY:", CONFIG["KUCOIN_API_KEY"])
 
 colorama_init(autoreset=True)
 
-TEST_MODE = False
-BATCH_SIZE = 50
-MAX_WORKERS = 10
-BATCH_DELAY = 1
-REPORT_INTERVAL = 200
+# ✅ 从 config 中读取运行参数
+RUN_MODE = CONFIG["RUN_MODE"]
+TEST_MODE = RUN_MODE["TEST_MODE"]
+BATCH_SIZE = RUN_MODE["BATCH_SIZE"]
+MAX_WORKERS = RUN_MODE["MAX_WORKERS"]
+BATCH_DELAY = RUN_MODE["BATCH_DELAY"]
+REPORT_INTERVAL = RUN_MODE["REPORT_INTERVAL"]
+
 POSITIONS_FILE = os.path.join(LOG_DIR, "positions.json")
 COUNTER_FILE = os.path.join(LOG_DIR, "run_counter.txt")
 
@@ -101,7 +104,13 @@ def main():
     if TEST_MODE:
         symbols = symbols[:30]
 
-    results = analyze_in_batches(symbols, max_workers=MAX_WORKERS, batch_size=BATCH_SIZE, delay_between_batches=BATCH_DELAY)
+    results = analyze_in_batches(
+        symbols,
+        max_workers=MAX_WORKERS,
+        batch_size=BATCH_SIZE,
+        delay_between_batches=BATCH_DELAY
+    )
+
     if not results:
         log("⚠️ 没有评分结果，跳过交易")
         return
