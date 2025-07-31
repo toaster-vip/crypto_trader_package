@@ -27,19 +27,6 @@ def test_kucoin_client():
     price = client.get_symbol_price(test_symbol)
     print(f"{test_symbol} 当前价格: {price}")
 
-    # 5. 下市价买入（大约 1 USDT）
-    print(f"\n[5] 市价买入 {test_symbol}")
-    buy_amount = 1.0
-    order_id = client.place_order(test_symbol, side="buy", size=buy_amount)
-    print(f"🛒 买单返回订单号: {order_id}")
-    time.sleep(3)
-
-    # 6. 市价卖出（估算买入量）
-    print(f"\n[6] 市价卖出 {test_symbol}")
-    sell_qty = round((buy_amount / price) * 0.998, 2)
-    order_id = client.place_order(test_symbol, side="sell", size=sell_qty)
-    print(f"💸 卖单返回订单号: {order_id}")
-
     print("\n✅ 所有 API 测试完成")
 
 if __name__ == "__main__":
