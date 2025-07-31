@@ -49,7 +49,7 @@ class KuCoinClient:
                         "minFunds": float(item.get("minFunds", 0)),
                         "minSize": float(item.get("baseMinSize", 0)),
                         "maxSize": float(item.get("baseMaxSize", 1e10)),
-                         "stepSize": float(item.get("baseIncrement", 0.000001))  # 加上这一行
+                        "stepSize": float(item.get("baseIncrement", 0.000001))
                     }
             print(f"[INFO] ✅ 已缓存 {len(self.symbol_limits_cache)} 个交易对限制参数")
         except Exception as e:
@@ -111,15 +111,19 @@ class KuCoinClient:
 
         if order_type == "market":
             if side == "buy":
+                # 市价买单需指定资金数量（USDT）
                 body_dict["funds"] = str(size)
             else:
+                # 市价卖单需指定数量（币数量）
                 body_dict["size"] = str(size)
         else:
+            # 限价单需提供 size 和 price
             body_dict["size"] = str(size)
             body_dict["price"] = str(price)
 
         body = json.dumps(body_dict)
         headers = self._get_headers("POST", endpoint, body)
+
         try:
             response = requests.post(url, headers=headers, data=body)
             result = response.json()
