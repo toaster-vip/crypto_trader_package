@@ -33,6 +33,14 @@ CONFIG = {
         "HOLD_THRESHOLD_RANK": 10,         # 前10名以内持仓继续持有
         "SCORE_DIFF_THRESHOLD": 0.10,      # 分数差异不足10%，继续持有
         "REQUIRE_CONSISTENT_ROUNDS": 2     # 连续两轮出现才买入
+    },
+
+    "RUN_MODE": {
+        "TEST_MODE": False,         # ✅ 设置 True 表示只分析前 30 个币
+        "BATCH_SIZE": 50,          # 每批处理数量
+        "MAX_WORKERS": 10,         # 并发线程数
+        "BATCH_DELAY": 1,          # 每批之间的延迟秒数
+        "REPORT_INTERVAL": 200     # 每多少轮发送盈亏报告
     }
 }
 
