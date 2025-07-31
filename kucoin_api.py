@@ -175,7 +175,7 @@ class KuCoinClient:
             print(f"[ERROR] Auto Earn 请求失败: {e}")
             return False
             
-            def get_trade_account_balance(self, currency="USDT"):
+    def get_trade_account_balance(self, currency="USDT"):
         """获取交易账户中指定币种的可用余额"""
         endpoint = "/api/v1/accounts"
         url = self.base_url + endpoint
