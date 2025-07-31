@@ -48,7 +48,8 @@ class KuCoinClient:
                     self.symbol_limits_cache[item["symbol"]] = {
                         "minFunds": float(item.get("minFunds", 0)),
                         "minSize": float(item.get("baseMinSize", 0)),
-                        "maxSize": float(item.get("baseMaxSize", 1e10))
+                        "maxSize": float(item.get("baseMaxSize", 1e10)),
+                         "stepSize": float(item.get("baseIncrement", 0.000001))  # 加上这一行
                     }
             print(f"[INFO] ✅ 已缓存 {len(self.symbol_limits_cache)} 个交易对限制参数")
         except Exception as e:
