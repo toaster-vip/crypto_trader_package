@@ -2,7 +2,6 @@ import time
 from config import CONFIG, LOG_DIR
 import logging
 
-# === API/账户分流 ===
 if CONFIG["SIMULATE"]:
     from sim_account import (
         sim_get_balance as get_account_balances,
@@ -13,13 +12,13 @@ if CONFIG["SIMULATE"]:
 else:
     from kucoin_api import (
         get_trade_account_balances as get_account_balances,
-        get_positions,   # 如果kucoin_api没有get_positions，用get_trade_account_balances也可
+        get_positions,
         place_order,
     )
     print("[系统] 运行于【真实KuCoin账户】模式，所有资金与持仓为实盘。")
 
 from strategy import score_symbols
-from notifier import send_serverchan  # ← 只调用实际存在的函数名
+from notifier import send_wechat_server_chan  # ← 完全对应你git里的函数名
 
 def main():
     start_time = time.time()
@@ -39,11 +38,11 @@ def main():
         top_symbols=top_symbols,
         balances=balances,
         positions=positions,
-        place_order=place_order  # 传递当前的下单函数，无论模拟/实盘
+        place_order=place_order
     )
 
-    # 4. 示例：推送本轮操作通知（如有报告可用）
-    # send_serverchan("本轮调仓报告", report_content)
+    # 4. 示例推送（如果需要）
+    # send_wechat_server_chan("本轮调仓报告", report_content)
 
     elapsed = time.time() - start_time
     print(f"[主控] 本轮运行完成，耗时{elapsed:.2f}秒")
