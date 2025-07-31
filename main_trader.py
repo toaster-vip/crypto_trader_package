@@ -1,5 +1,3 @@
-# main_trader.py
-
 import os
 import time
 import json
@@ -29,7 +27,7 @@ def log(msg):
         f.write(f"[{timestamp}] {msg}\n")
 
 def analyze_in_batches(symbols, max_workers=10, batch_size=50, delay_between_batches=2):
-    scores = {}
+    results = {}
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i + batch_size]
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -37,12 +35,13 @@ def analyze_in_batches(symbols, max_workers=10, batch_size=50, delay_between_bat
             for future in as_completed(futures):
                 symbol = futures[future]
                 try:
-                    scores[symbol] = future.result()
-                    print(f"{Fore.YELLOW}{symbol:<12} Score: {scores[symbol]:.3f}{Style.RESET_ALL}")
+                    result = future.result()
+                    results[symbol] = result
+                    print(f"{Fore.YELLOW}{symbol:<12} Score: {result['score']:.3f} Vol: {result['volume']:.2f}{Style.RESET_ALL}")
                 except Exception as e:
                     print(f"{Fore.RED}[ERROR] 分析失败 {symbol}: {e}{Style.RESET_ALL}")
         time.sleep(delay_between_batches)
-    return scores
+    return results
 
 def load_json(path):
     if os.path.exists(path):
@@ -99,35 +98,22 @@ def main():
     if TEST_MODE:
         symbols = symbols[:30]
 
-    scores = analyze_in_batches(symbols, max_workers=MAX_WORKERS, batch_size=BATCH_SIZE, delay_between_batches=BATCH_DELAY)
-    if not scores:
+    results = analyze_in_batches(symbols, max_workers=MAX_WORKERS, batch_size=BATCH_SIZE, delay_between_batches=BATCH_DELAY)
+    if not results:
         log("⚠️ 没有评分结果，跳过交易")
         return
 
-    # 获取市场成交量数据
-    log("📦 开始获取所有评分币种的市场成交量...")
-    symbol_volumes = {}
-    for symbol in scores:
-        try:
-            data = client.get_market_data(symbol)
-            symbol_volumes[symbol] = data.get("vol", 0)
-            print(f"[成交量] {symbol}: {symbol_volumes[symbol]}")
-        except Exception as e:
-            print(f"[ERROR] 获取 {symbol} 成交量失败: {e}")
-            symbol_volumes[symbol] = 0
+    # 拆分为分数和成交量
+    scores = {s: v["score"] for s, v in results.items()}
+    volumes = {s: v["volume"] for s, v in results.items()}
 
     log("📊 开始排序 top N 币种评分（含成交量辅助）...")
-    top = sorted(scores.items(), key=lambda x: (x[1], symbol_volumes.get(x[0], 0)), reverse=True)
+    top = sorted(scores.items(), key=lambda x: (x[1], volumes.get(x[0], 0)), reverse=True)
     top_symbols_with_scores = top[:3]
     print("✅ 排序完成，前3名为：", top_symbols_with_scores)
 
     log(f"🔥 评分最高币种: {[s[0] for s in top_symbols_with_scores]}")
     log("🧠 调仓逻辑开始执行 rebalance_portfolio()")
-    rebalance_portfolio(client, holdings, top_symbols_with_scores, POSITIONS_FILE)
-    log("✅ 调仓逻辑执行完毕")
-    top_symbols_with_scores = top[:3]
-
-    log(f"🔥 评分最高币种: {[s[0] for s in top_symbols_with_scores]}")
     rebalance_portfolio(client, holdings, top_symbols_with_scores, POSITIONS_FILE)
     log("✅ 本轮交易执行完毕")
 
