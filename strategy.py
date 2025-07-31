@@ -6,40 +6,59 @@ import pandas as pd
 import requests
 from config import STRATEGY
 
-def get_symbol_score(symbol):
-    df = get_klines(symbol)
-    if df is None or len(df) < 30:
-        print(f"[WARN] 跳过评分，数据不足：{symbol}")
-        return {
-            "score": 0,
-            "volume": 0
-        }
-
-    scores = {
-        "rsi": score_rsi(df),
-        "macd": score_macd(df),
-        "ma": score_ma(df),
-        "momentum": score_momentum(df),
-        "adx": score_adx(df),
-        "obv": score_obv(df),
-        "cci": score_cci(df),
-        "kdj": score_kdj(df),
-        "sar": score_sar(df),
-        "bollinger": score_bollinger(df),
-        "volume": score_volume_spike(df)
+def get_klines(symbol, interval='1hour', limit=100, max_retries=3):
+    url = "https://api.kucoin.com/api/v1/market/candles"
+    params = {
+        "symbol": symbol,
+        "type": interval
     }
+    for attempt in range(max_retries):
+        time.sleep(0.15)
+        try:
+            print(f"[⏳] 正在获取K线数据：{symbol}（第 {attempt+1} 次尝试）")
+            resp = requests.get(url, params=params, timeout=10)
 
-    total = 0
-    for key, score in scores.items():
-        weight = STRATEGY.get(f"{key.upper()}_WEIGHT", 0)
-        total += score * weight
+            print(f"[DEBUG] 请求 URL: {resp.url}")
+            print(f"[DEBUG] 响应状态码: {resp.status_code}")
 
-    print(f"📊 策略评分 {symbol}: {scores} ➜ 总分: {round(total, 3)}")
+            if resp.status_code == 429:
+                wait_time = 2 ** (attempt + 1)
+                print(f"[⚠️] 请求过快（429），等待 {wait_time}s 后重试：{symbol}")
+                time.sleep(wait_time)
+                continue
 
-    return {
-        "score": round(total, 3),
-        "volume": float(df['volume'].iloc[-1])  # 取最后一根K线的成交量
-    }
+            if resp.status_code != 200:
+                print(f"[❌] 状态码错误 {resp.status_code}：{symbol}，内容：{resp.text}")
+                continue
+
+            data = resp.json()
+            candles = data.get("data", [])
+
+            if not candles or not isinstance(candles, list):
+                print(f"[⚠️] 无效K线数据：{symbol}，返回：{data}")
+                return None
+
+            print(f"[DEBUG] 获取到 {len(candles)} 条K线数据：{symbol}")
+
+            df = pd.DataFrame(candles, columns=['t', 'o', 'c', 'h', 'l', 'v', 'turnover'])
+            df = df.sort_values(by='t')
+            df['close'] = df['c'].astype(float)
+            df['high'] = df['h'].astype(float)
+            df['low'] = df['l'].astype(float)
+            df['volume'] = df['v'].astype(float)
+
+            if len(df) < 30:
+                print(f"[⚠️] 数据不足（仅 {len(df)} 行）：{symbol}")
+                return None
+
+            return df
+
+        except Exception as e:
+            print(f"[🛑] 获取K线失败 {symbol}: {e}")
+            time.sleep(1)
+
+    print(f"[❌] 多次重试失败，放弃：{symbol}")
+    return None
     
 # === 策略函数（打分范围为 -1.0 ~ +1.0） ===
 
