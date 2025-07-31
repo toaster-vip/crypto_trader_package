@@ -5,6 +5,7 @@ import json
 import time
 from config import CONFIG
 from colorama import Fore, Style
+from decimal import Decimal, ROUND_DOWN
 
 BUY_HISTORY_FILE = os.path.join(CONFIG["LOG_DIR"], "buy_history.json")
 REBALANCE_CFG = CONFIG["REBALANCE"]
@@ -122,7 +123,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
         if s not in recommended_scores:
             buy_history[s] = 0
 
-    # 动态买入逻辑（已加入资金与数量判断 + symbol 限制）
+    # 动态买入逻辑
     total_score = sum([recommended_scores[s] for s in top_symbols])
     for s in top_symbols:
         base = s.replace("-USDT", "")
@@ -140,20 +141,21 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
             print(f"{Fore.YELLOW}⚠️ 分配资金过少 {allocation:.2f}，跳过 {base}{Style.RESET_ALL}")
             continue
 
-        qty = round((allocation * (1 - fee_rate)) / price, 6)
-
-        # 🔍 获取 symbol 限制信息（如最小交易金额、最小/最大数量）
         symbol_limits = client.get_symbol_limits(s)
         if symbol_limits:
             min_funds = float(symbol_limits.get("minFunds", 0))
             min_size = float(symbol_limits.get("minSize", 0))
             max_size = float(symbol_limits.get("maxSize", 1e10))
+            step_size = float(symbol_limits.get("stepSize", 0.000001))
         else:
             min_funds = 0
             min_size = 0
             max_size = 1e10
+            step_size = 0.000001
 
-        # ✅ 应用限制判断
+        raw_qty = (allocation * (1 - fee_rate)) / price
+        qty = float((Decimal(str(raw_qty)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN)))
+
         if allocation < min_funds:
             print(f"{Fore.YELLOW}⚠️ 分配金额 {allocation:.2f} 小于最小下单金额 {min_funds}，跳过 {base}{Style.RESET_ALL}")
             continue
@@ -168,7 +170,11 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
 
         print(f"{Fore.LIGHTGREEN_EX}📈 买入 {base}: 分配={allocation:.2f}, 数量={qty}{Style.RESET_ALL}")
         if not simulate:
-            client.place_order(s, "buy", size=str(qty))
+            resp = client.place_order(s, "buy", size=str(qty))
+            if not resp:
+                print(f"{Fore.RED}[ERROR] 下单失败，跳过 {base}{Style.RESET_ALL}")
+                continue
+
         positions[base] = {
             "entry_price": round(price * (1 + fee_rate), 6),
             "timestamp": client.get_timestamp()
