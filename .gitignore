@@ -17,7 +17,6 @@ taenv/
 *.swp
 
 .env
-config.py
 crypto_trader_package_cleaned.git/
 bfg-1.14.0.jar
 .bfg-replace.txt
