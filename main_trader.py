@@ -18,9 +18,8 @@ else:
     )
     print("[系统] 运行于【真实KuCoin账户】模式，所有资金与持仓为实盘。")
 
-# 其它模块
 from strategy import score_symbols
-from notifier import send_server_chan
+from notifier import send_serverchan  # ← 只调用实际存在的函数名
 
 def main():
     start_time = time.time()
@@ -42,6 +41,9 @@ def main():
         positions=positions,
         place_order=place_order  # 传递当前的下单函数，无论模拟/实盘
     )
+
+    # 4. 示例：推送本轮操作通知（如有报告可用）
+    # send_serverchan("本轮调仓报告", report_content)
 
     elapsed = time.time() - start_time
     print(f"[主控] 本轮运行完成，耗时{elapsed:.2f}秒")
