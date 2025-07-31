@@ -1,4 +1,5 @@
 # rebalancer.py
+
 import os
 import json
 import time
@@ -24,12 +25,14 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
     recommended_scores = {s: sc for s, sc in recommended_tuples}
     top_symbols = [s for s, _ in recommended_tuples[:3]]
 
+    # 加载历史持仓
     if os.path.exists(positions_file):
         with open(positions_file, "r") as f:
             positions = json.load(f)
     else:
         positions = {}
 
+    # 止盈止损逻辑
     for symbol, info in positions.copy().items():
         if symbol not in current_holdings:
             continue
@@ -40,20 +43,17 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
         if not current_price:
             continue
         pnl = (current_price - entry_price) / entry_price
-        if pnl >= take_profit or pnl <= stop_loss:
-            print(f"{Fore.YELLOW}⚖️ 止盈/止损触发，卖出 {symbol}, PnL={pnl:.2%}{Style.RESET_ALL}")
-            if not simulate:
-                client.place_order(full_symbol, "sell", size=str(qty))
-            positions.pop(symbol, None)
-
-    print(f"{Fore.MAGENTA}[DEBUG] 当前持仓评分参考：{Style.RESET_ALL}")
-    for symbol in current_holdings:
-        if symbol == "USDT":
+        if pnl >= take_profit:
+            print(f"{Fore.MAGENTA}🎯 止盈卖出 {symbol} 盈利 {pnl:.2%}{Style.RESET_ALL}")
+        elif pnl <= stop_loss:
+            print(f"{Fore.RED}🛑 止损卖出 {symbol} 亏损 {pnl:.2%}{Style.RESET_ALL}")
+        else:
             continue
-        full = f"{symbol}-USDT"
-        score = recommended_scores.get(full, "N/A")
-        print(f"{Fore.MAGENTA}- {full}: 评分 = {score}{Style.RESET_ALL}")
+        if not simulate:
+            client.place_order(full_symbol, "sell", size=str(qty))
+        positions.pop(symbol, None)
 
+    # 卖出非优先币种
     print("[DEBUG] 卖出非优先币种")
     for symbol in current_holdings:
         if symbol == "USDT":
@@ -67,17 +67,18 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
             min_required = max(recommended_scores.values()) * (1 - SCORE_DIFF_THRESHOLD)
             if score >= min_required:
                 continue
-        print(f"{Fore.LIGHTBLACK_EX}🧹 卖出非优先币种 {symbol}{Style.RESET_ALL}")
         if not simulate:
             client.place_order(full, "sell", size=str(current_holdings[symbol]))
         positions.pop(symbol, None)
 
+    # 获取交易账户余额
     trade_usdt = client.get_trade_account_balance("USDT")
     main_usdt = current_holdings.get("USDT", 0)
     available_usdt = trade_usdt
     print(f"{Fore.CYAN}💵 交易账户 USDT 余额: {trade_usdt:.4f}{Style.RESET_ALL}")
 
     if available_usdt <= 0 and main_usdt > 0:
+        print(f"{Fore.YELLOW}⚠️ 尝试从主账户转入 {main_usdt} USDT{Style.RESET_ALL}")
         if not simulate:
             success = client.transfer_to_trade_account("USDT", amount=main_usdt)
             if success:
@@ -85,8 +86,13 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
                 trade_usdt = client.get_trade_account_balance("USDT")
                 available_usdt = trade_usdt
 
+    if available_usdt <= 0:
+        print(f"{Fore.RED}❌ 无可用 USDT，跳过买入{Style.RESET_ALL}")
+        return
+
     available_usdt *= (1 - reserve_ratio)
 
+    # 买入历史
     if os.path.exists(BUY_HISTORY_FILE):
         with open(BUY_HISTORY_FILE, "r") as f:
             buy_history = json.load(f)
@@ -110,22 +116,36 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
         price = client.get_symbol_price(s)
         if not price:
             continue
-        allocation = (score / total_score) * available_usdt
-        allocation *= 0.998  # ✅ 保守减 0.2%
 
-        if allocation < 5:
-            print(f"{Fore.YELLOW}⚠️ 分配资金过少 {allocation:.2f}，跳过 {base}{Style.RESET_ALL}")
-            continue
+        allocation = (score / total_score) * available_usdt
+        allocation *= 0.998  # 保守减 0.2% 作为手续费缓冲
 
         symbol_limits = client.get_symbol_limits(s)
-        if symbol_limits and allocation < symbol_limits.get("minFunds", 0):
-            print(f"{Fore.YELLOW}⚠️ 分配金额 {allocation:.2f} 小于最小下单金额 {symbol_limits['minFunds']}，跳过 {base}{Style.RESET_ALL}")
+        if symbol_limits:
+            min_funds = float(symbol_limits.get("minFunds", 0))
+            min_size = float(symbol_limits.get("minSize", 0))
+            max_size = float(symbol_limits.get("maxSize", 1e10))
+            step_size = float(symbol_limits.get("stepSize", 0.000001))
+        else:
+            min_funds = 0
+            min_size = 0
+            max_size = 1e10
+            step_size = 0.000001
+
+        if allocation < min_funds:
+            print(f"{Fore.YELLOW}⚠️ 分配金额 {allocation:.2f} 小于最小下单金额 {min_funds}，跳过 {base}{Style.RESET_ALL}")
+            continue
+
+        raw_qty = allocation / price
+        qty = float((Decimal(str(raw_qty)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN)))
+
+        if qty < min_size or qty > max_size:
+            print(f"{Fore.YELLOW}⚠️ 数量 {qty} 不满足限制 [{min_size} ~ {max_size}]，跳过 {base}{Style.RESET_ALL}")
             continue
 
         print(f"{Fore.LIGHTGREEN_EX}📈 买入 {base}: 分配={allocation:.2f} USDT（市价单）{Style.RESET_ALL}")
         if not simulate:
-            resp = client.place_order(s, "buy", size=xxx)
-            #resp = client.place_order(s, "buy", size=None, funds=str(allocation))  # ✅ 传 funds
+            resp = client.place_order(s, "buy", size=allocation)  # ✅ 市价买入，传 USDT
             if not resp:
                 print(f"{Fore.RED}[ERROR] 下单失败，跳过 {base}{Style.RESET_ALL}")
                 continue
@@ -135,6 +155,7 @@ def rebalance_portfolio(client, current_holdings, recommended_tuples, positions_
             "timestamp": client.get_timestamp()
         }
 
+    # 保存记录
     with open(positions_file, "w") as f:
         json.dump(positions, f, indent=2)
     with open(BUY_HISTORY_FILE, "w") as f:
