@@ -10,9 +10,12 @@ from notifier import send_serverchan_notification
 from config import CONFIG, LOG_DIR
 from colorama import Fore, Style, init as colorama_init
 
+print("🧩 [main_trader.py] 加载 config.py 成功")
+print("🔑 当前配置中的 API_KEY:", CONFIG["KUCOIN_API_KEY"])
+
 colorama_init(autoreset=True)
 
-TEST_MODE = False
+TEST_MODE = True
 BATCH_SIZE = 50
 MAX_WORKERS = 10
 BATCH_DELAY = 1
