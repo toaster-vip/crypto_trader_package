@@ -178,7 +178,10 @@ def get_symbol_score(symbol):
     df = get_klines(symbol)
     if df is None or len(df) < 30:
         print(f"[WARN] 跳过评分，数据不足：{symbol}")
-        return 0
+        return {
+            "score": 0,
+            "volume": 0
+        }
 
     scores = {
         "rsi": score_rsi(df),
@@ -200,7 +203,11 @@ def get_symbol_score(symbol):
         total += score * weight
 
     print(f"📊 策略评分 {symbol}: {scores} ➜ 总分: {round(total, 3)}")
-    return round(total, 3)
+
+    return {
+        "score": round(total, 3),
+        "volume": float(df['volume'].iloc[-1])  # 取最后一根K线的成交量
+    }
 
 # === 包装器 ===
 
