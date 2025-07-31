@@ -11,6 +11,8 @@ from rebalancer import rebalance_portfolio
 from notifier import send_serverchan_notification
 from config import CONFIG, LOG_DIR
 from colorama import Fore, Style, init as colorama_init
+from dotenv import load_dotenv
+load_dotenv()
 
 print("🧩 [main_trader.py] 加载 config.py 成功")
 print("🔑 当前配置中的 API_KEY:", CONFIG["KUCOIN_API_KEY"])
