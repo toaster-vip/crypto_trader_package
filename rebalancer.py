@@ -9,7 +9,7 @@ _symbol_buy_cooldown = {}
 
 TAKE_PROFIT = Decimal(str(TRADE["TAKE_PROFIT"]))
 STOP_LOSS = Decimal(str(TRADE["STOP_LOSS"]))
-MAX_ALLOC_PER_SYMBOL = Decimal("0.10")
+MAX_ALLOC_PER_SYMBOL = Decimal(str(CONFIG.get("MAX_POSITION_RATIO", 0.18)))  # 支持config中动态调整
 COOLDOWN_AFTER_LOSS = 3
 USDT_STEP = Decimal("0.01")
 
@@ -30,8 +30,8 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     api = KuCoinClient()
     is_simulate = CONFIG.get("SIMULATE", True)
     raw_usdt = Decimal(str(balances.get("USDT", 0)))
-    usdt_total = Decimal(str(CONFIG.get("USDT_CAP", 100))) if is_simulate else raw_usdt
-    usdt_avail = usdt_total
+    usdt_total = Decimal(str(CONFIG.get("SIM_START_BALANCE", 100))) if is_simulate else raw_usdt
+    usdt_avail = raw_usdt
 
     # 1. 打印当前每个持仓的现价总值与买入总价
     positions = {k: v for k, v in positions.items() if Decimal(str(v.get("amount", 0))) > 0}
@@ -94,7 +94,6 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         usdt_avail = Decimal(str(balances.get("USDT", 0)))
     print("\n[调仓] 卖出后账户快照：")
     print(f"  - 可用USDT: {usdt_avail:.2f}")
-    # 更新positions，剔除已卖出
     for symbol in sell_list:
         positions.pop(symbol, None)
     hold_total_value = Decimal("0")
@@ -104,48 +103,46 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             hold_total_value += cur_price * Decimal(str(pos.get("amount", 0)))
     print(f"  - 持仓币种市值合计: {hold_total_value:.2f}\n")
 
-    if usdt_avail <= 1:
-        print(f"[调仓] 💰 USDT 余额不足（{usdt_avail}），停止买入")
-        return
+    # 最优资金分配
+    cur_holding_count = len([s for s in positions if Decimal(str(positions[s].get("amount", 0))) > 0])
+    max_hold_count = CONFIG.get("MAX_HOLD_COUNT", 6)
+    remain_slots = max_hold_count - cur_holding_count
+    reserve_ratio = Decimal(str(CONFIG.get("RESERVE_RATIO", 0.12)))
+    min_buy_amount = Decimal(str(CONFIG.get("MIN_BUY_AMOUNT", 5)))
+    fixed_buy_amount = Decimal(str(CONFIG.get("FIXED_BUY_AMOUNT", 10)))
 
-    max_alloc = (usdt_total * MAX_ALLOC_PER_SYMBOL).quantize(USDT_STEP, rounding=ROUND_DOWN)
+    usdt_buyable = (usdt_avail * (Decimal("1") - reserve_ratio)).quantize(USDT_STEP, rounding=ROUND_DOWN)
+
     buy_count = 0
-
-    # === 买入逻辑 ===
     for symbol in top_symbols:
-        if symbol in positions:
-            print(f"[调仓] 🟡 已持有 {symbol}，跳过")
-            continue
-        if symbol in _blacklist:
-            print(f"[调仓] ⛔ 黑名单跳过 {symbol}")
-            continue
-        if _symbol_buy_cooldown.get(symbol, 0) > 0:
-            print(f"[调仓] ⏳ 冷却中跳过 {symbol}")
+        if remain_slots <= 0 or usdt_buyable < min_buy_amount:
+            break
+        if symbol in positions or symbol in _blacklist or _symbol_buy_cooldown.get(symbol, 0) > 0:
             continue
 
-        buy_amount = min(usdt_avail, max_alloc).quantize(USDT_STEP, rounding=ROUND_DOWN)
-        if buy_amount < Decimal("5"):
+        max_alloc = (usdt_total * MAX_ALLOC_PER_SYMBOL).quantize(USDT_STEP, rounding=ROUND_DOWN)
+        buy_amount = min(usdt_buyable / remain_slots, fixed_buy_amount, max_alloc)
+        buy_amount = buy_amount.quantize(USDT_STEP, rounding=ROUND_DOWN)
+        if buy_amount < min_buy_amount:
             print(f"[调仓] ⚠️ 资金不足跳过 {symbol}")
             continue
 
         result = place_order("buy", symbol, float(buy_amount), None, now_time=now)
         if result:
             print(f"[调仓] ✅ 买入 {symbol} 成功，金额 {buy_amount}")
-            usdt_avail -= buy_amount
+            usdt_buyable -= buy_amount
             buy_count += 1
-            cur_price = get_price_with_map(symbol, price_map, api)
-            if cur_price:
-                hold_total_value += cur_price * buy_amount
+            remain_slots -= 1
         else:
             print(f"[调仓] ❌ 买入 {symbol} 失败")
 
-        if usdt_avail < Decimal("5"):
+        if usdt_buyable < min_buy_amount:
             print(f"[调仓] 💸 余额耗尽，结束买入")
             break
 
     # 3. 买入后账户余额与持仓市值合计
     print("\n[调仓] 买入后账户快照：")
-    print(f"  - 可用USDT: {usdt_avail:.2f}")
+    print(f"  - 可用USDT: {usdt_buyable:.2f}")
     print(f"  - 持仓币种市值合计: {hold_total_value:.2f}\n")
 
     # 冷却期更新
