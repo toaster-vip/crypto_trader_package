@@ -10,7 +10,6 @@ import requests
 
 DEFAULT_WORKERS = 10
 MIN_TURNOVER_1H = CONFIG.get("MIN_TURNOVER_1H", 5000)
-
 progress_counter = {"done": 0}
 
 def fetch_score(symbol, sleep_time=0.18):
@@ -78,12 +77,6 @@ def main():
             sim_place_order as sim_place_order_raw,
         )
         print("[系统] 运行于【本地模拟账户】模式。")
-        # --------- 修改点：包装place_order使市价始终同步 ---------
-        def place_order(side, symbol, amount, price=None, now_time=None):
-            return sim_place_order_raw(
-                side, symbol, amount, price, now_time,
-                market_price=price_map.get(symbol)
-            )
     else:
         print("[系统] 运行于【真实KuCoin账户】模式。")
         get_account_balances = api.get_account_holdings
@@ -149,6 +142,16 @@ def main():
     print(f"[主控] 持仓总市值：{total_value:.2f} USDT，持仓成本：{total_cost:.2f} USDT，浮盈亏：{total_value-total_cost:.2f} USDT")
     for sym, amt, entry, price, val, cost in details:
         print(f"   - {sym}: 数量{amt:.4f}, 买入{entry}, 现价{price}, 市值{val:.2f}, 盈亏{val-cost:.2f}")
+
+    # ------ 关键：模拟盘下单始终用市价 --------
+    if CONFIG.get("SIMULATE"):
+        def place_order(side, symbol, amount, price=None, now_time=None):
+            # price_map是最新市价映射
+            return sim_place_order_raw(
+                side, symbol, amount, price, now_time,
+                market_price=price_map.get(symbol)
+            )
+    # ------------------------------------------
 
     rebalance_portfolio(
         top_symbols=top_symbols,
