@@ -1,4 +1,3 @@
-import time
 from config import CONFIG, LOG_DIR
 import logging
 
@@ -14,17 +13,23 @@ else:
         get_trade_account_balances as get_account_balances,
         get_positions,
         place_order,
+        get_supported_symbols
     )
     print("[系统] 运行于【真实KuCoin账户】模式，所有资金与持仓为实盘。")
 
-from strategy import get_top_symbols  # ★ 只import实际有的主入口函数
+from strategy import get_symbol_score
 from notifier import send_serverchan_notification
 
 def main():
+    import time
     start_time = time.time()
-    # 获取推荐币种（主入口已修正）
-    top_symbols = get_top_symbols()
-    print(f"\n[主控] 本轮Top评分币种: {top_symbols[:5]}")
+    # 获取所有可用币种
+    symbols = get_supported_symbols()
+    # 对每个币种评分
+    all_scores = {s: get_symbol_score(s) for s in symbols}
+    # 排序取Top N
+    top_symbols = sorted(all_scores, key=all_scores.get, reverse=True)[:5]
+    print(f"\n[主控] 本轮Top评分币种: {top_symbols}")
 
     balances = get_account_balances()
     positions = get_positions()
@@ -38,9 +43,6 @@ def main():
         positions=positions,
         place_order=place_order
     )
-
-    # 如需推送调仓报告通知，取消注释即可
-    # send_serverchan_notification("本轮调仓报告", report_content)
 
     elapsed = time.time() - start_time
     print(f"[主控] 本轮运行完成，耗时{elapsed:.2f}秒")
