@@ -50,64 +50,67 @@ def sim_log_order(side, symbol, amount, price, fee, total, time_str):
     with open(SIM_LOG_FILE, "a") as f:
         f.write(line)
 
-def sim_place_order(side, symbol, amount, price, now_time=None, market_price=None):
+def sim_place_order(side, symbol, amount, price=None, now_time=None, market_price=None):
     balances = sim_get_balance()
     positions = sim_get_positions()
     base, quote = symbol.split("-")
     amount = Decimal(str(amount))
-    # ------- 修改处：优先用 price、再用 market_price、最后才 fallback 1.0 -------
-    if price is not None:
-        price = Decimal(str(price))
-    elif market_price is not None:
-        price = Decimal(str(market_price))
-    else:
-        price = Decimal("1.0")
-    # -------------------------------------------------------------------
-    fee = Decimal("0")
-    total = Decimal("0")
-    time_str = now_time or "now"
-
+    # -- PATCH: 买单只看金额, 市价转数量 --
     if side == "buy":
-        cost = (amount * price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        final_price = Decimal(str(market_price if market_price else price if price else 1))
+        qty = (amount / final_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        cost = (qty * final_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
         fee = (cost * FEE_RATE).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
         total = cost + fee
         if Decimal(str(balances.get("USDT", 0))) < total:
             print(f"[SIM] USDT不足，买入失败: 需{total}, 余额{balances.get('USDT', 0)}")
             return None
         balances["USDT"] = float(Decimal(str(balances["USDT"])) - total)
-        positions.setdefault(symbol, {"amount": 0, "entry_price": 0, "last_update": time_str})
+        positions.setdefault(symbol, {"amount": 0, "entry_price": 0, "last_update": now_time or "now"})
         prev_amt = Decimal(str(positions[symbol]["amount"]))
-        new_amt = prev_amt + amount
+        new_amt = prev_amt + qty
         new_cost = (prev_amt * Decimal(str(positions[symbol]["entry_price"])) + cost) / new_amt if new_amt > 0 else Decimal("0")
         positions[symbol]["amount"] = float(new_amt)
         positions[symbol]["entry_price"] = float(new_cost)
-        positions[symbol]["last_update"] = time_str
-        sim_log_order("buy", symbol, float(amount), float(price), float(fee), float(total), time_str)
-
+        positions[symbol]["last_update"] = now_time or "now"
+        sim_log_order("buy", symbol, float(qty), float(final_price), float(fee), float(total), now_time or "now")
+        result = {
+            "side": side,
+            "symbol": symbol,
+            "amount": float(qty),
+            "price": float(final_price),
+            "fee": float(fee),
+            "total": float(total),
+            "time": now_time or "now"
+        }
     elif side == "sell":
+        final_price = Decimal(str(market_price if market_price else price if price else 1))
         prev_amt = Decimal(str(positions.get(symbol, {}).get("amount", 0)))
         if prev_amt < amount:
             print(f"[SIM] {symbol} 持仓不足，卖出失败: 要卖{amount}, 持有{prev_amt}")
             return None
-        gain = (amount * price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        gain = (amount * final_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
         fee = (gain * FEE_RATE).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
         net = gain - fee
         new_amt = prev_amt - amount
         positions[symbol]["amount"] = float(new_amt)
-        positions[symbol]["last_update"] = time_str
+        positions[symbol]["last_update"] = now_time or "now"
         balances["USDT"] = float(Decimal(str(balances.get("USDT", 0))) + net)
         if new_amt == 0:
             positions.pop(symbol)
-        sim_log_order("sell", symbol, float(amount), float(price), float(fee), float(net), time_str)
+        sim_log_order("sell", symbol, float(amount), float(final_price), float(fee), float(net), now_time or "now")
+        result = {
+            "side": side,
+            "symbol": symbol,
+            "amount": float(amount),
+            "price": float(final_price),
+            "fee": float(fee),
+            "total": float(net),
+            "time": now_time or "now"
+        }
+    else:
+        return None
 
     sim_update_balance(balances)
     sim_update_positions(positions)
-    return {
-        "side": side,
-        "symbol": symbol,
-        "amount": float(amount),
-        "price": float(price),
-        "fee": float(fee),
-        "total": float(total if side == "buy" else net),
-        "time": time_str
-    }
+    return result
