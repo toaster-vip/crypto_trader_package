@@ -4,7 +4,7 @@ from config import CONFIG, LOG_DIR
 import logging
 from strategy import get_symbol_score
 from notifier import send_serverchan_notification
-from rebalancer import rebalance_portfolio
+from rebalancer import rebalance_portfolio, get_blacklist, is_symbol_in_cooldown
 from kucoin_api import KuCoinClient
 
 DEFAULT_WORKERS = 10
@@ -48,16 +48,24 @@ def main():
     all_scores = {}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # 注意：用 map 自动按照顺序返回结果，不用as_completed遍历
         results = list(executor.map(lambda sym: fetch_score(sym, sleep_time), all_symbols))
 
-    # 组装结果
     for symbol, score in results:
         all_scores[symbol] = score
 
+    # === 筛除黑名单和冷却中的币 ===
+    filtered_scores = {
+        symbol: score for symbol, score in all_scores.items()
+        if symbol not in get_blacklist() and not is_symbol_in_cooldown(symbol)
+    }
+
+    if not filtered_scores:
+        print("[主控] ⚠️ 所有币种均被排除，无可操作标的。")
+        return
+
     top_n = CONFIG.get("TOP_N", 5)
-    top_symbols = sorted(all_scores, key=all_scores.get, reverse=True)[:top_n]
-    print(f"\n[主控] 本轮Top评分币种: {top_symbols}")
+    top_symbols = sorted(filtered_scores, key=filtered_scores.get, reverse=True)[:top_n]
+    print(f"\n[主控] 本轮Top评分币种（已过滤）: {top_symbols}")
 
     balances = get_account_balances()
     positions = get_positions()
