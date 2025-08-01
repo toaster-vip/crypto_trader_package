@@ -6,7 +6,6 @@ from kucoin_api import KuCoinClient
 
 _blacklist = set()
 _symbol_buy_cooldown = {}
-_price_cache = {}
 
 TAKE_PROFIT = Decimal(str(TRADE["TAKE_PROFIT"]))
 STOP_LOSS = Decimal(str(TRADE["STOP_LOSS"]))
@@ -15,27 +14,19 @@ COOLDOWN_AFTER_LOSS = 3
 USDT_STEP = Decimal("0.01")
 
 
-def get_price_with_cache(symbol, api_client):
-    if symbol in _price_cache:
-        return _price_cache[symbol]
-    for attempt in range(3):
-        try:
-            price = api_client.get_symbol_price(symbol)
-            if price:
-                _price_cache[symbol] = Decimal(str(price))
-                return _price_cache[symbol]
-        except Exception as e:
-            if "429" in str(e):
-                wait = 2 ** attempt
-                print(f"[限速] KuCoin 429 错误，等待 {wait}s 重试 {symbol}")
-                time.sleep(wait)
-            else:
-                print(f"[错误] 获取价格失败 {symbol}：{e}")
-                break
+def get_price_with_map(symbol, price_map, api_client):
+    # 先查批量ticker，没有再实时拉（极少数fallback）
+    if price_map and symbol in price_map and price_map[symbol] is not None:
+        return Decimal(str(price_map[symbol]))
+    try:
+        price = api_client.get_symbol_price(symbol)
+        if price:
+            return Decimal(str(price))
+    except Exception as e:
+        print(f"[错误] 获取{symbol}实时价格失败：{e}")
     return None
 
-
-def rebalance_portfolio(top_symbols, balances, positions, place_order):
+def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None):
     print("\n🔁 [调仓] 开始执行智能调仓逻辑")
 
     api = KuCoinClient()
@@ -48,10 +39,11 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order):
     sell_list = []
     now = time.strftime('%Y-%m-%d %H:%M:%S')
 
+    # === 卖出逻辑 ===
     for symbol, pos in positions.items():
         entry = Decimal(str(pos.get("entry_price", 0)))
         amount = Decimal(str(pos.get("amount", 0)))
-        current_price = get_price_with_cache(symbol, api)
+        current_price = get_price_with_map(symbol, price_map, api)
         if not current_price or not entry:
             continue
         pnl_pct = (current_price - entry) / entry
@@ -120,7 +112,6 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order):
             del _symbol_buy_cooldown[s]
 
     print(f"[调仓] ✅ 调仓结束，共买入 {buy_count} 个币种")
-
 
 def get_blacklist():
     return _blacklist
