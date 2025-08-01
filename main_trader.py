@@ -1,30 +1,26 @@
 import time
 import concurrent.futures
 from config import CONFIG, LOG_DIR
-import logging
 from strategy import get_symbol_score
 from notifier import send_serverchan_notification
 from rebalancer import rebalance_portfolio, get_blacklist, is_symbol_in_cooldown
 from kucoin_api import KuCoinClient
 
 DEFAULT_WORKERS = 10
+MIN_TURNOVER_1H = CONFIG.get("MIN_TURNOVER_1H", 5000)
 
 def fetch_score(symbol, sleep_time=0.18):
-    """单币评分线程入口，sleep可调节吞吐"""
     try:
-        time.sleep(sleep_time)  # 每线程小延迟，防爆发
+        time.sleep(sleep_time)
         score_data = get_symbol_score(symbol)
-        if isinstance(score_data, dict):
-            return symbol, score_data["score"]
-        else:
-            return symbol, score_data
+        return symbol, score_data.get("score", 0), score_data.get("turnover", 0)
     except Exception as e:
         print(f"[WARN] 获取 {symbol} 评分失败: {e}")
-        return symbol, -999
+        return symbol, -999, 0
 
 def main():
     start_time = time.time()
-    api = KuCoinClient()  # 实例化API对象
+    api = KuCoinClient()
 
     if CONFIG["SIMULATE"]:
         from sim_account import (
@@ -32,14 +28,13 @@ def main():
             sim_get_positions as get_positions,
             sim_place_order as place_order,
         )
-        print("[系统] 运行于【本地模拟账户】模式，所有资金与持仓均仅本地模拟。")
+        print("[系统] 运行于【本地模拟账户】模式。")
     else:
-        print("[系统] 运行于【真实KuCoin账户】模式，所有资金与持仓为实盘。")
+        print("[系统] 运行于【真实KuCoin账户】模式。")
         get_account_balances = api.get_account_holdings
         get_positions = api.get_account_holdings
         place_order = api.place_order
 
-    # 自动获取所有支持的USDT币对
     all_symbols = api.get_supported_symbols()
     print(f"[主控] 共获取到 {len(all_symbols)} 个交易对，开始多线程评分...")
 
@@ -50,17 +45,21 @@ def main():
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(executor.map(lambda sym: fetch_score(sym, sleep_time), all_symbols))
 
-    for symbol, score in results:
-        all_scores[symbol] = score
-
-    # === 筛除黑名单和冷却中的币 ===
-    filtered_scores = {
-        symbol: score for symbol, score in all_scores.items()
-        if symbol not in get_blacklist() and not is_symbol_in_cooldown(symbol)
-    }
+    filtered_scores = {}
+    for symbol, score, turnover in results:
+        if turnover < MIN_TURNOVER_1H:
+            print(f"[过滤] {symbol} 最近1小时成交额 {turnover:.2f} USDT < {MIN_TURNOVER_1H}，剔除")
+            continue
+        if symbol in get_blacklist():
+            print(f"[过滤] {symbol} 在黑名单中，剔除")
+            continue
+        if is_symbol_in_cooldown(symbol):
+            print(f"[过滤] {symbol} 正在冷却中，剔除")
+            continue
+        filtered_scores[symbol] = score
 
     if not filtered_scores:
-        print("[主控] ⚠️ 所有币种均被排除，无可操作标的。")
+        print("[主控] ⚠️ 没有可用的币种（全部被过滤）。")
         return
 
     top_n = CONFIG.get("TOP_N", 5)
