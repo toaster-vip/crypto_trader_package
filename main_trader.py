@@ -5,6 +5,7 @@ from strategy import get_symbol_score
 from notifier import send_serverchan_notification
 from rebalancer import rebalance_portfolio, get_blacklist, is_symbol_in_cooldown
 from kucoin_api import KuCoinClient
+import requests
 
 DEFAULT_WORKERS = 10
 MIN_TURNOVER_1H = CONFIG.get("MIN_TURNOVER_1H", 5000)
