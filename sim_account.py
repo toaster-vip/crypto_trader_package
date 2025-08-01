@@ -55,7 +55,8 @@ def sim_place_order(side, symbol, amount, price=None, now_time=None, market_pric
     positions = sim_get_positions()
     base, quote = symbol.split("-")
     amount = Decimal(str(amount))
-    # -- PATCH: 买单只看金额, 市价转数量 --
+    time_str = now_time or "now"
+
     if side == "buy":
         final_price = Decimal(str(market_price if market_price else price if price else 1))
         qty = (amount / final_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
@@ -66,14 +67,15 @@ def sim_place_order(side, symbol, amount, price=None, now_time=None, market_pric
             print(f"[SIM] USDT不足，买入失败: 需{total}, 余额{balances.get('USDT', 0)}")
             return None
         balances["USDT"] = float(Decimal(str(balances["USDT"])) - total)
-        positions.setdefault(symbol, {"amount": 0, "entry_price": 0, "last_update": now_time or "now"})
+        positions.setdefault(symbol, {"amount": 0, "entry_price": 0, "last_update": time_str})
         prev_amt = Decimal(str(positions[symbol]["amount"]))
         new_amt = prev_amt + qty
+        # 加权新均价
         new_cost = (prev_amt * Decimal(str(positions[symbol]["entry_price"])) + cost) / new_amt if new_amt > 0 else Decimal("0")
         positions[symbol]["amount"] = float(new_amt)
         positions[symbol]["entry_price"] = float(new_cost)
-        positions[symbol]["last_update"] = now_time or "now"
-        sim_log_order("buy", symbol, float(qty), float(final_price), float(fee), float(total), now_time or "now")
+        positions[symbol]["last_update"] = time_str
+        sim_log_order("buy", symbol, float(qty), float(final_price), float(fee), float(total), time_str)
         result = {
             "side": side,
             "symbol": symbol,
@@ -81,7 +83,7 @@ def sim_place_order(side, symbol, amount, price=None, now_time=None, market_pric
             "price": float(final_price),
             "fee": float(fee),
             "total": float(total),
-            "time": now_time or "now"
+            "time": time_str
         }
     elif side == "sell":
         final_price = Decimal(str(market_price if market_price else price if price else 1))
@@ -94,11 +96,11 @@ def sim_place_order(side, symbol, amount, price=None, now_time=None, market_pric
         net = gain - fee
         new_amt = prev_amt - amount
         positions[symbol]["amount"] = float(new_amt)
-        positions[symbol]["last_update"] = now_time or "now"
+        positions[symbol]["last_update"] = time_str
         balances["USDT"] = float(Decimal(str(balances.get("USDT", 0))) + net)
         if new_amt == 0:
             positions.pop(symbol)
-        sim_log_order("sell", symbol, float(amount), float(final_price), float(fee), float(net), now_time or "now")
+        sim_log_order("sell", symbol, float(amount), float(final_price), float(fee), float(net), time_str)
         result = {
             "side": side,
             "symbol": symbol,
@@ -106,7 +108,7 @@ def sim_place_order(side, symbol, amount, price=None, now_time=None, market_pric
             "price": float(final_price),
             "fee": float(fee),
             "total": float(net),
-            "time": now_time or "now"
+            "time": time_str
         }
     else:
         return None
