@@ -6,7 +6,6 @@ import requests
 import json
 from config import CONFIG
 
-
 class KuCoinClient:
     def __init__(self):
         self.api_key = CONFIG["KUCOIN_API_KEY"]
@@ -45,12 +44,15 @@ class KuCoinClient:
             data = response.json()
             for item in data.get("data", []):
                 if item["enableTrading"]:
-                    self.symbol_limits_cache[item["symbol"]] = {
-                        "minFunds": float(item.get("minFunds", 0)),
-                        "minSize": float(item.get("baseMinSize", 0)),
-                        "maxSize": float(item.get("baseMaxSize", 1e10)),
-                        "stepSize": float(item.get("baseIncrement", 0.000001))
-                    }
+                    try:
+                        self.symbol_limits_cache[item["symbol"]] = {
+                            "minFunds": float(item.get("minFunds") or 0),
+                            "minSize": float(item.get("baseMinSize") or 0),
+                            "maxSize": float(item.get("baseMaxSize") or 1e10),
+                            "stepSize": float(item.get("baseIncrement") or 0.000001)
+                        }
+                    except Exception as e:
+                        print(f"[WARN] 忽略异常交易对 {item.get('symbol')}: {e}")
             print(f"[INFO] ✅ 已缓存 {len(self.symbol_limits_cache)} 个交易对限制参数")
         except Exception as e:
             print(f"[ERROR] 初始化 symbol 限制缓存失败: {e}")
@@ -111,13 +113,10 @@ class KuCoinClient:
 
         if order_type == "market":
             if side == "buy":
-                # 市价买单需指定资金数量（USDT）
                 body_dict["funds"] = str(size)
             else:
-                # 市价卖单需指定数量（币数量）
                 body_dict["size"] = str(size)
         else:
-            # 限价单需提供 size 和 price
             body_dict["size"] = str(size)
             body_dict["price"] = str(price)
 
@@ -148,80 +147,3 @@ class KuCoinClient:
         except Exception as e:
             print(f"[ERROR] 获取价格失败 {symbol}: {e}")
             return None
-
-    def get_timestamp(self):
-        try:
-            url = self.base_url + "/api/v1/timestamp"
-            response = requests.get(url)
-            response.raise_for_status()
-            data = response.json()
-            return int(data["data"])
-        except Exception as e:
-            print(f"[ERROR] 获取时间戳失败: {e}")
-            return int(time.time() * 1000)
-
-    def redeem_autoearn(self, currency="USDT", amount=None):
-        endpoint = "/api/v1/earn/account/redeem"
-        url = self.base_url + endpoint
-        body_dict = {
-            "currency": currency
-        }
-        if amount:
-            body_dict["redeemAmount"] = str(amount)
-        body = json.dumps(body_dict)
-        headers = self._get_headers("POST", endpoint, body)
-        try:
-            response = requests.post(url, headers=headers, data=body)
-            res_json = response.json()
-            if res_json.get("code") == "200000":
-                print(f"[INFO] 已提交 Auto Earn 赎回请求（{currency}）")
-                return True
-            else:
-                print(f"[WARN] Auto Earn 赎回失败: {res_json}")
-                return False
-        except Exception as e:
-            print(f"[ERROR] Auto Earn 请求失败: {e}")
-            return False
-
-    def get_trade_account_balance(self, currency="USDT"):
-        endpoint = "/api/v1/accounts"
-        url = self.base_url + endpoint
-        headers = self._get_headers("GET", endpoint)
-        try:
-            response = requests.get(url, headers=headers)
-            data = response.json()
-            for acc in data.get("data", []):
-                if acc.get("type") == "trade" and acc.get("currency") == currency:
-                    balance = float(acc.get("available") or 0)
-                    print(f"[🔍] 交易账户 {currency} 可用余额: {balance}")
-                    return balance
-            print(f"[WARN] 未找到交易账户 {currency} 余额信息")
-            return 0.0
-        except Exception as e:
-            print(f"[ERROR] 获取交易账户余额失败: {e}")
-            return 0.0
-
-    def transfer_to_trade_account(self, currency="USDT", amount=1.0):
-        endpoint = "/api/v2/accounts/inner-transfer"
-        url = self.base_url + endpoint
-        body_dict = {
-            "clientOid": str(int(time.time() * 1000)),
-            "currency": currency,
-            "from": "main",
-            "to": "trade",
-            "amount": str(amount)
-        }
-        body = json.dumps(body_dict)
-        headers = self._get_headers("POST", endpoint, body)
-        try:
-            response = requests.post(url, headers=headers, data=body)
-            data = response.json()
-            if data.get("code") == "200000":
-                print(f"[✅] 已从主账户转入 {amount} {currency} 到交易账户")
-                return True
-            else:
-                print(f"[ERROR] 转账失败: {data}")
-                return False
-        except Exception as e:
-            print(f"[ERROR] 转账请求异常: {e}")
-            return False
