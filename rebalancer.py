@@ -14,7 +14,6 @@ COOLDOWN_AFTER_LOSS = 3
 USDT_STEP = Decimal("0.01")
 
 def get_price_with_map(symbol, price_map, api_client):
-    # 优先用批量ticker，没有再实时拉
     if price_map and symbol in price_map and price_map[symbol] is not None:
         return Decimal(str(price_map[symbol]))
     try:
