@@ -75,9 +75,15 @@ def main():
         from sim_account import (
             sim_get_balance as get_account_balances,
             sim_get_positions as get_positions,
-            sim_place_order as place_order,
+            sim_place_order as sim_place_order_raw,
         )
         print("[系统] 运行于【本地模拟账户】模式。")
+        # --------- 修改点：包装place_order使市价始终同步 ---------
+        def place_order(side, symbol, amount, price=None, now_time=None):
+            return sim_place_order_raw(
+                side, symbol, amount, price, now_time,
+                market_price=price_map.get(symbol)
+            )
     else:
         print("[系统] 运行于【真实KuCoin账户】模式。")
         get_account_balances = api.get_account_holdings
