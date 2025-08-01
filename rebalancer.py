@@ -1,29 +1,3 @@
-import time
-from decimal import Decimal, ROUND_DOWN
-from config import CONFIG, TRADE
-from notifier import send_serverchan_notification
-from kucoin_api import KuCoinClient
-
-_blacklist = set()
-_symbol_buy_cooldown = {}
-
-TAKE_PROFIT = Decimal(str(TRADE["TAKE_PROFIT"]))
-STOP_LOSS = Decimal(str(TRADE["STOP_LOSS"]))
-MAX_ALLOC_PER_SYMBOL = Decimal(str(CONFIG.get("MAX_POSITION_RATIO", 0.18)))
-COOLDOWN_AFTER_LOSS = 3
-USDT_STEP = Decimal("0.01")
-
-def get_price_with_map(symbol, price_map, api_client):
-    if price_map and symbol in price_map and price_map[symbol] is not None:
-        return Decimal(str(price_map[symbol]))
-    try:
-        price = api_client.get_symbol_price(symbol)
-        if price:
-            return Decimal(str(price))
-    except Exception as e:
-        print(f"[错误] 获取{symbol}实时价格失败：{e}")
-    return None
-
 def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None):
     print("\n🔁 [调仓] 开始执行智能调仓逻辑")
     api = KuCoinClient()
@@ -74,11 +48,19 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             print(f"📉 排名跌出Top：卖出 {symbol}")
             sell_list.append(symbol)
 
+    # === 执行卖出，详细打印成本和盈亏明细 ===
     for symbol in sell_list:
         pos = positions.get(symbol)
         if not pos:
             continue
-        result = place_order("sell", symbol, pos["amount"], None, now_time=now)
+        entry_price = Decimal(str(pos.get("entry_price", 0)))
+        amount = Decimal(str(pos.get("amount", 0)))
+        cur_price = get_price_with_map(symbol, price_map, api)
+        cost = entry_price * amount
+        value = (cur_price or Decimal("0")) * amount
+        pnl = value - cost
+        print(f"[调仓] ⚡ 卖出{symbol} - 持仓{amount:.8f} 买入总成本{cost:.8f} 卖出总额{value:.8f} 盈亏{pnl:.8f}")
+        result = place_order("sell", symbol, float(amount), None, now_time=now)
         if result:
             print(f"[调仓] ✅ 卖出 {symbol} 成功")
         else:
@@ -119,9 +101,20 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             print(f"[调仓] ⚠️ 资金不足跳过 {symbol}")
             continue
 
-        result = place_order("buy", symbol, float(buy_amount), None, now_time=now)  # PATCH: 只传金额
+        cur_price = get_price_with_map(symbol, price_map, api)
+        if not cur_price or cur_price <= 0:
+            print(f"[调仓] ❗ 跳过 {symbol}（获取市价失败）")
+            continue
+
+        if is_simulate:
+            buy_qty = (buy_amount / cur_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+            result = place_order("buy", symbol, float(buy_qty), float(cur_price), now_time=now)
+            print(f"[调仓] ✅ 买入 {symbol} 成功，金额 {buy_amount}，单价 {cur_price}，买入数量 {buy_qty}")
+        else:
+            result = place_order("buy", symbol, float(buy_amount), None, now_time=now)
+            print(f"[调仓] ✅ 买入 {symbol} 成功，金额 {buy_amount}（市价买入，真实下单金额）")
+
         if result:
-            print(f"[调仓] ✅ 买入 {symbol} 成功，金额 {buy_amount}")
             usdt_buyable -= buy_amount
             buy_count += 1
             remain_slots -= 1
@@ -142,9 +135,3 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             del _symbol_buy_cooldown[s]
 
     print(f"[调仓] ✅ 调仓结束，共买入 {buy_count} 个币种")
-
-def get_blacklist():
-    return _blacklist
-
-def is_symbol_in_cooldown(symbol):
-    return _symbol_buy_cooldown.get(symbol, 0) > 0
