@@ -36,7 +36,7 @@ def get_all_tickers(api):
             if last is not None and symbol:
                 try:
                     ticker_map[symbol] = float(last)
-                except Exception as e:
+                except Exception:
                     pass
         return ticker_map
     except Exception as e:
@@ -51,6 +51,21 @@ def progress_watcher(total):
             last_print = progress_counter["done"]
         time.sleep(10)
     print(f"[进度] 已全部完成：{total}/{total}")
+
+def get_portfolio_stats(positions, price_map):
+    total_value = 0
+    total_cost = 0
+    details = []
+    for symbol, pos in positions.items():
+        amount = float(pos.get("amount", 0))
+        entry_price = float(pos.get("entry_price", 0))
+        price = float(price_map.get(symbol, entry_price))
+        value = amount * price
+        cost = amount * entry_price
+        total_value += value
+        total_cost += cost
+        details.append((symbol, amount, entry_price, price, value, cost))
+    return total_value, total_cost, details
 
 def main():
     start_time = time.time()
@@ -105,7 +120,6 @@ def main():
             continue
         filtered_scores[symbol] = score
 
-    # 概览输出
     print(f"[过滤] 本轮共 {turnover_filtered}/{total} 个币种因成交额不足 {MIN_TURNOVER_1H} USDT 被过滤。")
     print(f"[过滤] 本轮共 {blacklist_filtered}/{total} 个币种因黑名单被过滤。")
     print(f"[过滤] 本轮共 {cooldown_filtered}/{total} 个币种因冷却期被过滤。")
@@ -123,6 +137,12 @@ def main():
     positions = get_positions()
     print(f"[主控] 当前账户余额: {balances}")
     print(f"[主控] 当前虚拟持仓: {positions}")
+
+    # --- 汇总资产并打印 ---
+    total_value, total_cost, details = get_portfolio_stats(positions, price_map)
+    print(f"[主控] 持仓总市值：{total_value:.2f} USDT，持仓成本：{total_cost:.2f} USDT，浮盈亏：{total_value-total_cost:.2f} USDT")
+    for sym, amt, entry, price, val, cost in details:
+        print(f"   - {sym}: 数量{amt:.4f}, 买入{entry}, 现价{price}, 市值{val:.2f}, 盈亏{val-cost:.2f}")
 
     rebalance_portfolio(
         top_symbols=top_symbols,
