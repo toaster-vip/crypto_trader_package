@@ -50,12 +50,19 @@ def sim_log_order(side, symbol, amount, price, fee, total, time_str):
     with open(SIM_LOG_FILE, "a") as f:
         f.write(line)
 
-def sim_place_order(side, symbol, amount, price, now_time=None):
+def sim_place_order(side, symbol, amount, price, now_time=None, market_price=None):
     balances = sim_get_balance()
     positions = sim_get_positions()
     base, quote = symbol.split("-")
     amount = Decimal(str(amount))
-    price = Decimal(str(price)) if price is not None else Decimal("1.0")
+    # ------- 修改处：优先用 price、再用 market_price、最后才 fallback 1.0 -------
+    if price is not None:
+        price = Decimal(str(price))
+    elif market_price is not None:
+        price = Decimal(str(market_price))
+    else:
+        price = Decimal("1.0")
+    # -------------------------------------------------------------------
     fee = Decimal("0")
     total = Decimal("0")
     time_str = now_time or "now"
