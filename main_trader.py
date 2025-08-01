@@ -1,5 +1,6 @@
 import time
 import concurrent.futures
+import threading
 from config import CONFIG, LOG_DIR
 from strategy import get_symbol_score
 from notifier import send_serverchan_notification
@@ -10,6 +11,9 @@ import requests
 DEFAULT_WORKERS = 10
 MIN_TURNOVER_1H = CONFIG.get("MIN_TURNOVER_1H", 5000)
 
+# 新增：进度计数器
+progress_counter = {"done": 0}
+
 def fetch_score(symbol, sleep_time=0.18):
     try:
         time.sleep(sleep_time)
@@ -18,9 +22,11 @@ def fetch_score(symbol, sleep_time=0.18):
     except Exception as e:
         print(f"[WARN] 获取 {symbol} 评分失败: {e}")
         return symbol, -999, 0
+    finally:
+        # 打分完成后，无论成功失败都+1
+        progress_counter["done"] += 1
 
 def get_all_tickers(api):
-    # 拉一次全市场最新ticker（价格快照，用于所有Top候选、持仓）
     url = api.base_url + "/api/v1/market/allTickers"
     try:
         resp = api.session.get(url) if hasattr(api, "session") else requests.get(url)
@@ -38,6 +44,15 @@ def get_all_tickers(api):
     except Exception as e:
         print(f"[ERROR] 批量获取ticker失败: {e}")
         return {}
+
+def progress_watcher(total):
+    last_print = -1
+    while progress_counter["done"] < total:
+        if progress_counter["done"] != last_print:
+            print(f"[进度] 已完成 {progress_counter['done']}/{total} 个币种评分...")
+            last_print = progress_counter["done"]
+        time.sleep(10)
+    print(f"[进度] 已全部完成：{total}/{total}")
 
 def main():
     start_time = time.time()
@@ -57,7 +72,8 @@ def main():
         place_order = api.place_order
 
     all_symbols = api.get_supported_symbols()
-    print(f"[主控] 共获取到 {len(all_symbols)} 个交易对，开始多线程评分...")
+    total = len(all_symbols)
+    print(f"[主控] 共获取到 {total} 个交易对，开始多线程评分...")
 
     max_workers = CONFIG.get("MAX_WORKERS", DEFAULT_WORKERS)
     sleep_time = CONFIG.get("WORKER_SLEEP", 0.18)
@@ -65,8 +81,16 @@ def main():
     # 一次性获取ticker
     price_map = get_all_tickers(api)
 
+    # 进度重置和监控线程
+    progress_counter["done"] = 0
+    progress_thread = threading.Thread(target=progress_watcher, args=(total,))
+    progress_thread.daemon = True
+    progress_thread.start()
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(executor.map(lambda sym: fetch_score(sym, sleep_time), all_symbols))
+
+    progress_thread.join()
 
     filtered_scores = {}
     for symbol, score, turnover in results:
