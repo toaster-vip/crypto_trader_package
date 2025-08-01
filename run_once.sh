@@ -8,8 +8,6 @@ export $(grep -v '^#' /home/linuxuser/crypto_trader_package/.env | xargs)
 # ✅ 激活虚拟环境
 source /home/linuxuser/taenv/bin/activate
 
-# ✅ 运行主程序
-python /home/linuxuser/crypto_trader_package/main_trader.py
 # ========== 配置 ==========
 PROJECT_DIR="/home/linuxuser/crypto_trader_package"
 VENV_DIR="/home/linuxuser/taenv"
