@@ -25,7 +25,15 @@ def get_all_tickers(api):
     try:
         resp = api.session.get(url) if hasattr(api, "session") else requests.get(url)
         data = resp.json()
-        ticker_map = {item["symbol"]: float(item["last"]) for item in data.get("data", {}).get("ticker", [])}
+        ticker_map = {}
+        for item in data.get("data", {}).get("ticker", []):
+            last = item.get("last")
+            symbol = item.get("symbol")
+            if last is not None and symbol:
+                try:
+                    ticker_map[symbol] = float(last)
+                except Exception as e:
+                    print(f"[WARN] 跳过ticker转换异常 {symbol} : {last}")
         return ticker_map
     except Exception as e:
         print(f"[ERROR] 批量获取ticker失败: {e}")
@@ -35,7 +43,7 @@ def main():
     start_time = time.time()
     api = KuCoinClient()
 
-    if CONFIG["SIMULATE"]:
+    if CONFIG.get("SIMULATE"):
         from sim_account import (
             sim_get_balance as get_account_balances,
             sim_get_positions as get_positions,
@@ -53,7 +61,6 @@ def main():
 
     max_workers = CONFIG.get("MAX_WORKERS", DEFAULT_WORKERS)
     sleep_time = CONFIG.get("WORKER_SLEEP", 0.18)
-    all_scores = {}
 
     # 一次性获取ticker
     price_map = get_all_tickers(api)
