@@ -17,22 +17,21 @@ else:
     )
     print("[系统] 运行于【真实KuCoin账户】模式，所有资金与持仓为实盘。")
 
+# 主入口严格以你strategy.py现有定义为准（只有score_symbols！）
 from strategy import score_symbols
-from notifier import send_serverchan_notification  # <- 必须用这个名字
+from notifier import send_serverchan_notification  # 你的notifier.py只定义了这个
 
 def main():
     start_time = time.time()
-    # 1. 获取可交易币种列表与评分
+    # 获取推荐币种
     top_symbols = score_symbols()
     print(f"\n[主控] 本轮Top评分币种: {top_symbols[:5]}")
 
-    # 2. 读取当前账户持仓&余额
     balances = get_account_balances()
     positions = get_positions()
     print(f"[主控] 当前账户余额: {balances}")
     print(f"[主控] 当前虚拟持仓: {positions}")
 
-    # 3. 卖出触发卖点的币（可直接调用rebalancer逻辑）
     from rebalancer import rebalance_portfolio
     rebalance_portfolio(
         top_symbols=top_symbols,
@@ -41,7 +40,7 @@ def main():
         place_order=place_order
     )
 
-    # 4. 示例推送（如需要，可以取消注释）
+    # 如需推送（如有报告内容，取消注释即可）
     # send_serverchan_notification("本轮调仓报告", report_content)
 
     elapsed = time.time() - start_time
