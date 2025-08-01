@@ -18,6 +18,18 @@ def fetch_score(symbol, sleep_time=0.18):
         print(f"[WARN] 获取 {symbol} 评分失败: {e}")
         return symbol, -999, 0
 
+def get_all_tickers(api):
+    # 拉一次全市场最新ticker（价格快照，用于所有Top候选、持仓）
+    url = api.base_url + "/api/v1/market/allTickers"
+    try:
+        resp = api.session.get(url) if hasattr(api, "session") else requests.get(url)
+        data = resp.json()
+        ticker_map = {item["symbol"]: float(item["last"]) for item in data.get("data", {}).get("ticker", [])}
+        return ticker_map
+    except Exception as e:
+        print(f"[ERROR] 批量获取ticker失败: {e}")
+        return {}
+
 def main():
     start_time = time.time()
     api = KuCoinClient()
@@ -41,6 +53,9 @@ def main():
     max_workers = CONFIG.get("MAX_WORKERS", DEFAULT_WORKERS)
     sleep_time = CONFIG.get("WORKER_SLEEP", 0.18)
     all_scores = {}
+
+    # 一次性获取ticker
+    price_map = get_all_tickers(api)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(executor.map(lambda sym: fetch_score(sym, sleep_time), all_symbols))
@@ -75,7 +90,8 @@ def main():
         top_symbols=top_symbols,
         balances=balances,
         positions=positions,
-        place_order=place_order
+        place_order=place_order,
+        price_map=price_map
     )
 
     elapsed = time.time() - start_time
