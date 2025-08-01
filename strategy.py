@@ -15,11 +15,7 @@ def get_klines(symbol, interval='1hour', limit=100, max_retries=3):
     for attempt in range(max_retries):
         time.sleep(0.15)
         try:
-            print(f"[⏳] 正在获取K线数据：{symbol}（第 {attempt+1} 次尝试）")
             resp = requests.get(url, params=params, timeout=10)
-
-            print(f"[DEBUG] 请求 URL: {resp.url}")
-            print(f"[DEBUG] 响应状态码: {resp.status_code}")
 
             if resp.status_code == 429:
                 wait_time = 2 ** (attempt + 1)
@@ -38,14 +34,14 @@ def get_klines(symbol, interval='1hour', limit=100, max_retries=3):
                 print(f"[⚠️] 无效K线数据：{symbol}，返回：{data}")
                 return None
 
-            print(f"[DEBUG] 获取到 {len(candles)} 条K线数据：{symbol}")
-
             df = pd.DataFrame(candles, columns=['t', 'o', 'c', 'h', 'l', 'v', 'turnover'])
             df = df.sort_values(by='t')
+            df['open'] = df['o'].astype(float)
             df['close'] = df['c'].astype(float)
             df['high'] = df['h'].astype(float)
             df['low'] = df['l'].astype(float)
             df['volume'] = df['v'].astype(float)
+            df['turnover'] = df['turnover'].astype(float)
 
             if len(df) < 30:
                 print(f"[⚠️] 数据不足（仅 {len(df)} 行）：{symbol}")
@@ -59,7 +55,7 @@ def get_klines(symbol, interval='1hour', limit=100, max_retries=3):
 
     print(f"[❌] 多次重试失败，放弃：{symbol}")
     return None
-    
+
 # === 策略函数（打分范围为 -1.0 ~ +1.0） ===
 
 def score_rsi(df):
@@ -72,7 +68,7 @@ def score_rsi(df):
     rsi = 100 - (100 / (1 + rs))
     val = rsi.iloc[-1]
     if val < 30:
-        return min(1.0, (30 - val) / 30)  # 越小分越高
+        return min(1.0, (30 - val) / 30)
     elif val > 70:
         return -min(1.0, (val - 70) / 30)
     return 0
@@ -95,7 +91,7 @@ def score_momentum(df):
     recent = df['close'].iloc[-1]
     past_avg = df['close'].rolling(10).mean().iloc[-2]
     diff = (recent - past_avg) / past_avg
-    return max(-1, min(1, diff * 5))  # 放大倍数但控制范围
+    return max(-1, min(1, diff * 5))
 
 def score_adx(df, period=14):
     high, low, close = df['high'], df['low'], df['close']
@@ -123,7 +119,6 @@ def score_obv(df):
             obv.append(obv[-1] - df['volume'].iloc[i])
         else:
             obv.append(obv[-1])
-    df['obv'] = obv
     slope = pd.Series(obv).diff().rolling(5).mean().iloc[-1]
     return max(-1, min(1, slope / (np.mean(obv[-10:]) + 1e-6)))
 
@@ -142,9 +137,7 @@ def score_kdj(df):
     k = rsv.ewm(com=2).mean()
     d = k.ewm(com=2).mean()
     j = 3 * k - 2 * d
-    val = j.iloc[-1]
-    if val < 0: val = 0
-    if val > 100: val = 100
+    val = max(0, min(100, j.iloc[-1]))
     return max(-1, min(1, (50 - val) / 50))
 
 def score_sar(df):
@@ -180,7 +173,9 @@ def get_symbol_score(symbol):
         print(f"[WARN] 跳过评分，数据不足：{symbol}")
         return {
             "score": 0,
-            "volume": 0
+            "volume": 0,
+            "turnover": 0,
+            "open": 0
         }
 
     scores = {
@@ -206,7 +201,9 @@ def get_symbol_score(symbol):
 
     return {
         "score": round(total, 3),
-        "volume": float(df['volume'].iloc[-1])  # 取最后一根K线的成交量
+        "volume": float(df['volume'].iloc[-1]),
+        "turnover": float(df['turnover'].iloc[-1]),
+        "open": float(df['open'].iloc[-1])
     }
 
 # === 包装器 ===
