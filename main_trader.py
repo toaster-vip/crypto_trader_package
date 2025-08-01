@@ -1,3 +1,4 @@
+import time
 from config import CONFIG, LOG_DIR
 import logging
 from strategy import get_symbol_score
@@ -6,10 +7,8 @@ from rebalancer import rebalance_portfolio
 from kucoin_api import KuCoinClient
 
 def main():
-    import time
     start_time = time.time()
-
-    api = KuCoinClient()  # 必须实例化
+    api = KuCoinClient()  # 实例化API对象
 
     if CONFIG["SIMULATE"]:
         from sim_account import (
@@ -18,26 +17,27 @@ def main():
             sim_place_order as place_order,
         )
         print("[系统] 运行于【本地模拟账户】模式，所有资金与持仓均仅本地模拟。")
-        # 模拟模式下自定义币种池（可选）
-        symbols = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT"]
     else:
         print("[系统] 运行于【真实KuCoin账户】模式，所有资金与持仓为实盘。")
-        # 通过 api 对象获取支持币种列表
-        symbols = api.get_supported_symbols()
         get_account_balances = api.get_account_holdings
         get_positions = api.get_account_holdings
         place_order = api.place_order
 
-    # 对每个币种打分
-    all_scores = {}
-    for s in symbols:
-        score_data = get_symbol_score(s)
-        if isinstance(score_data, dict):
-            all_scores[s] = score_data["score"]
-        else:
-            all_scores[s] = score_data
+    # 自动获取所有支持的 USDT 币对
+    all_symbols = api.get_supported_symbols()
+    # 如需仅测试部分币种，可用 all_symbols = all_symbols[:20]
+    print(f"[主控] 共获取到 {len(all_symbols)} 个交易对，开始评分...")
 
-    # 按分数排序取Top N
+    # 分币种打分
+    all_scores = {}
+    for symbol in all_symbols:
+        score_data = get_symbol_score(symbol)
+        if isinstance(score_data, dict):
+            all_scores[symbol] = score_data["score"]
+        else:
+            all_scores[symbol] = score_data
+
+    # 按分数排序取Top N（建议N=5，太多易出错）
     top_n = CONFIG.get("TOP_N", 5)
     top_symbols = sorted(all_scores, key=all_scores.get, reverse=True)[:top_n]
     print(f"\n[主控] 本轮Top评分币种: {top_symbols}")
