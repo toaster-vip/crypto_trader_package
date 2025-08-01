@@ -9,7 +9,7 @@ _symbol_buy_cooldown = {}
 
 TAKE_PROFIT = Decimal(str(TRADE["TAKE_PROFIT"]))
 STOP_LOSS = Decimal(str(TRADE["STOP_LOSS"]))
-MAX_ALLOC_PER_SYMBOL = Decimal(str(CONFIG.get("MAX_POSITION_RATIO", 0.18)))  # 支持config中动态调整
+MAX_ALLOC_PER_SYMBOL = Decimal(str(CONFIG.get("MAX_POSITION_RATIO", 0.18)))
 COOLDOWN_AFTER_LOSS = 3
 USDT_STEP = Decimal("0.01")
 
@@ -26,14 +26,12 @@ def get_price_with_map(symbol, price_map, api_client):
 
 def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None):
     print("\n🔁 [调仓] 开始执行智能调仓逻辑")
-
     api = KuCoinClient()
     is_simulate = CONFIG.get("SIMULATE", True)
     raw_usdt = Decimal(str(balances.get("USDT", 0)))
     usdt_total = Decimal(str(CONFIG.get("SIM_START_BALANCE", 100))) if is_simulate else raw_usdt
     usdt_avail = raw_usdt
 
-    # 1. 打印当前每个持仓的现价总值与买入总价
     positions = {k: v for k, v in positions.items() if Decimal(str(v.get("amount", 0))) > 0}
     print("🪙 当前持仓市值与成本：")
     hold_total_cost, hold_total_value = Decimal("0"), Decimal("0")
@@ -51,8 +49,6 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
 
     sell_list = []
     now = time.strftime('%Y-%m-%d %H:%M:%S')
-
-    # === 卖出逻辑 ===
     for symbol, pos in positions.items():
         try:
             entry = Decimal(str(pos.get("entry_price", 0)))
@@ -78,7 +74,6 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             print(f"📉 排名跌出Top：卖出 {symbol}")
             sell_list.append(symbol)
 
-    # === 执行卖出 ===
     for symbol in sell_list:
         pos = positions.get(symbol)
         if not pos:
@@ -89,7 +84,6 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         else:
             print(f"[调仓] ❌ 卖出 {symbol} 失败")
 
-    # 2. 卖出后账户余额与持仓市值统计
     if not is_simulate:
         usdt_avail = Decimal(str(balances.get("USDT", 0)))
     print("\n[调仓] 卖出后账户快照：")
@@ -103,14 +97,12 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             hold_total_value += cur_price * Decimal(str(pos.get("amount", 0)))
     print(f"  - 持仓币种市值合计: {hold_total_value:.2f}\n")
 
-    # 最优资金分配
     cur_holding_count = len([s for s in positions if Decimal(str(positions[s].get("amount", 0))) > 0])
     max_hold_count = CONFIG.get("MAX_HOLD_COUNT", 6)
     remain_slots = max_hold_count - cur_holding_count
     reserve_ratio = Decimal(str(CONFIG.get("RESERVE_RATIO", 0.12)))
     min_buy_amount = Decimal(str(CONFIG.get("MIN_BUY_AMOUNT", 5)))
     fixed_buy_amount = Decimal(str(CONFIG.get("FIXED_BUY_AMOUNT", 10)))
-
     usdt_buyable = (usdt_avail * (Decimal("1") - reserve_ratio)).quantize(USDT_STEP, rounding=ROUND_DOWN)
 
     buy_count = 0
@@ -127,7 +119,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             print(f"[调仓] ⚠️ 资金不足跳过 {symbol}")
             continue
 
-        result = place_order("buy", symbol, float(buy_amount), None, now_time=now)
+        result = place_order("buy", symbol, float(buy_amount), None, now_time=now)  # PATCH: 只传金额
         if result:
             print(f"[调仓] ✅ 买入 {symbol} 成功，金额 {buy_amount}")
             usdt_buyable -= buy_amount
@@ -140,12 +132,10 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             print(f"[调仓] 💸 余额耗尽，结束买入")
             break
 
-    # 3. 买入后账户余额与持仓市值合计
     print("\n[调仓] 买入后账户快照：")
     print(f"  - 可用USDT: {usdt_buyable:.2f}")
     print(f"  - 持仓币种市值合计: {hold_total_value:.2f}\n")
 
-    # 冷却期更新
     for s in list(_symbol_buy_cooldown.keys()):
         _symbol_buy_cooldown[s] -= 1
         if _symbol_buy_cooldown[s] <= 0:
