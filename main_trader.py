@@ -17,14 +17,13 @@ else:
     )
     print("[系统] 运行于【真实KuCoin账户】模式，所有资金与持仓为实盘。")
 
-# 主入口严格以你strategy.py现有定义为准（只有score_symbols！）
-from strategy import score_symbols
-from notifier import send_serverchan_notification  # 你的notifier.py只定义了这个
+from strategy import get_top_symbols  # ★ 只import实际有的主入口函数
+from notifier import send_serverchan_notification
 
 def main():
     start_time = time.time()
-    # 获取推荐币种
-    top_symbols = score_symbols()
+    # 获取推荐币种（主入口已修正）
+    top_symbols = get_top_symbols()
     print(f"\n[主控] 本轮Top评分币种: {top_symbols[:5]}")
 
     balances = get_account_balances()
@@ -40,7 +39,7 @@ def main():
         place_order=place_order
     )
 
-    # 如需推送（如有报告内容，取消注释即可）
+    # 如需推送调仓报告通知，取消注释即可
     # send_serverchan_notification("本轮调仓报告", report_content)
 
     elapsed = time.time() - start_time
