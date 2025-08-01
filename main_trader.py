@@ -11,7 +11,6 @@ import requests
 DEFAULT_WORKERS = 10
 MIN_TURNOVER_1H = CONFIG.get("MIN_TURNOVER_1H", 5000)
 
-# 新增：进度计数器
 progress_counter = {"done": 0}
 
 def fetch_score(symbol, sleep_time=0.18):
@@ -23,7 +22,6 @@ def fetch_score(symbol, sleep_time=0.18):
         print(f"[WARN] 获取 {symbol} 评分失败: {e}")
         return symbol, -999, 0
     finally:
-        # 打分完成后，无论成功失败都+1
         progress_counter["done"] += 1
 
 def get_all_tickers(api):
@@ -39,7 +37,7 @@ def get_all_tickers(api):
                 try:
                     ticker_map[symbol] = float(last)
                 except Exception as e:
-                    print(f"[WARN] 跳过ticker转换异常 {symbol} : {last}")
+                    pass
         return ticker_map
     except Exception as e:
         print(f"[ERROR] 批量获取ticker失败: {e}")
@@ -78,10 +76,8 @@ def main():
     max_workers = CONFIG.get("MAX_WORKERS", DEFAULT_WORKERS)
     sleep_time = CONFIG.get("WORKER_SLEEP", 0.18)
 
-    # 一次性获取ticker
     price_map = get_all_tickers(api)
 
-    # 进度重置和监控线程
     progress_counter["done"] = 0
     progress_thread = threading.Thread(target=progress_watcher, args=(total,))
     progress_thread.daemon = True
@@ -93,17 +89,27 @@ def main():
     progress_thread.join()
 
     filtered_scores = {}
+    turnover_filtered = 0
+    blacklist_filtered = 0
+    cooldown_filtered = 0
+
     for symbol, score, turnover in results:
         if turnover < MIN_TURNOVER_1H:
-            print(f"[过滤] {symbol} 最近1小时成交额 {turnover:.2f} USDT < {MIN_TURNOVER_1H}，剔除")
+            turnover_filtered += 1
             continue
         if symbol in get_blacklist():
-            print(f"[过滤] {symbol} 在黑名单中，剔除")
+            blacklist_filtered += 1
             continue
         if is_symbol_in_cooldown(symbol):
-            print(f"[过滤] {symbol} 正在冷却中，剔除")
+            cooldown_filtered += 1
             continue
         filtered_scores[symbol] = score
+
+    # 概览输出
+    print(f"[过滤] 本轮共 {turnover_filtered}/{total} 个币种因成交额不足 {MIN_TURNOVER_1H} USDT 被过滤。")
+    print(f"[过滤] 本轮共 {blacklist_filtered}/{total} 个币种因黑名单被过滤。")
+    print(f"[过滤] 本轮共 {cooldown_filtered}/{total} 个币种因冷却期被过滤。")
+    print(f"[过滤] 本轮剩余 {len(filtered_scores)}/{total} 个币种进入下一轮筛选。")
 
     if not filtered_scores:
         print("[主控] ⚠️ 没有可用的币种（全部被过滤）。")
