@@ -16,6 +16,7 @@ COOLDOWN_AFTER_LOSS = 3                           # 单币亏损后冷却N轮
 # 精度设置
 USDT_STEP = Decimal("0.01")
 
+
 def rebalance_portfolio(top_symbols, balances, positions, place_order):
     print("\n🔁 [调仓] 开始执行智能调仓逻辑")
 
@@ -32,7 +33,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order):
     for symbol, pos in positions.items():
         entry = Decimal(str(pos.get("entry_price", 0)))
         amount = Decimal(str(pos.get("amount", 0)))
-        current_price = entry  # ⛳ 如需实时报价可替换此行
+        current_price = entry  # ⛳ 可替换为实时报价
 
         if current_price and entry:
             pnl_pct = (current_price - entry) / entry
@@ -104,3 +105,15 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order):
             del _symbol_buy_cooldown[s]
 
     print(f"[调仓] 🔚 调仓完毕，共买入 {buy_count} 个币种")
+
+
+# === 外部访问接口 ===
+
+def get_blacklist():
+    """获取当前黑名单币种集合"""
+    return _blacklist
+
+
+def is_symbol_in_cooldown(symbol):
+    """判断某个币是否仍在冷却期"""
+    return _symbol_buy_cooldown.get(symbol, 0) > 0
