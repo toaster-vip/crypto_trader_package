@@ -1,179 +1,158 @@
+# rebalancer.py
 import time
-import concurrent.futures
-import threading
-from config import CONFIG, LOG_DIR
-from strategy import get_symbol_score
+from decimal import Decimal, ROUND_DOWN
+from config import CONFIG, TRADE
 from notifier import send_serverchan_notification
 from kucoin_api import KuCoinClient
-import requests
 
-DEFAULT_WORKERS = 10
-MIN_TURNOVER_1H = CONFIG.get("MIN_TURNOVER_1H", 5000)
-MAX_NEWCOIN_DAYS = 7  # 如果你想结合币上线时间判定可调整
-progress_counter = {"done": 0}
+_blacklist = set()
+_symbol_buy_cooldown = {}
 
-def fetch_score(symbol, sleep_time=0.18):
+TAKE_PROFIT = Decimal(str(TRADE["TAKE_PROFIT"]))
+STOP_LOSS = Decimal(str(TRADE["STOP_LOSS"]))
+MAX_ALLOC_PER_SYMBOL = Decimal(str(CONFIG.get("MAX_POSITION_RATIO", 0.10)))
+COOLDOWN_AFTER_LOSS = 3
+USDT_STEP = Decimal("0.01")
+
+def get_price_with_map(symbol, price_map, api_client):
+    if price_map and symbol in price_map and price_map[symbol] is not None:
+        return Decimal(str(price_map[symbol]))
     try:
-        time.sleep(sleep_time)
-        score_data = get_symbol_score(symbol)
-        return symbol, score_data
+        price = api_client.get_symbol_price(symbol)
+        if price:
+            return Decimal(str(price))
     except Exception as e:
-        print(f"[WARN] 获取 {symbol} 评分失败: {e}")
-        return symbol, {"score": -999, "turnover": 0, "is_new_coin": True, "is_extreme": False}
-    finally:
-        progress_counter["done"] += 1
+        print(f"[错误] 获取{symbol}实时价格失败：{e}")
+    return None
 
-def get_all_tickers(api):
-    url = api.base_url + "/api/v1/market/allTickers"
-    try:
-        resp = api.session.get(url) if hasattr(api, "session") else requests.get(url)
-        data = resp.json()
-        ticker_map = {}
-        for item in data.get("data", {}).get("ticker", []):
-            last = item.get("last")
-            symbol = item.get("symbol")
-            if last is not None and symbol:
-                try:
-                    ticker_map[symbol] = float(last)
-                except Exception:
-                    pass
-        return ticker_map
-    except Exception as e:
-        print(f"[ERROR] 批量获取ticker失败: {e}")
-        return {}
-
-def progress_watcher(total):
-    last_print = -1
-    while progress_counter["done"] < total:
-        if progress_counter["done"] != last_print:
-            print(f"[进度] 已完成 {progress_counter['done']}/{total} 个币种评分...")
-            last_print = progress_counter["done"]
-        time.sleep(10)
-    print(f"[进度] 已全部完成：{total}/{total}")
-
-def get_portfolio_stats(positions, price_map):
-    total_value = 0
-    total_cost = 0
-    details = []
-    for symbol, pos in positions.items():
-        amount = float(pos.get("amount", 0))
-        entry_price = float(pos.get("entry_price", 0))
-        price = float(price_map.get(symbol, entry_price))
-        value = amount * price
-        cost = amount * entry_price
-        total_value += value
-        total_cost += cost
-        details.append((symbol, amount, entry_price, price, value, cost))
-    return total_value, total_cost, details
-
-def main():
-    start_time = time.time()
+def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None):
+    print("\n🔁 [调仓] 开始执行智能调仓逻辑")
     api = KuCoinClient()
+    is_simulate = CONFIG.get("SIMULATE", True)
+    raw_usdt = Decimal(str(balances.get("USDT", 0)))
+    usdt_total = Decimal(str(CONFIG.get("SIM_START_BALANCE", 100))) if is_simulate else raw_usdt
+    usdt_avail = raw_usdt
 
-    if CONFIG.get("SIMULATE"):
-        from sim_account import (
-            sim_get_balance as get_account_balances,
-            sim_get_positions as get_positions,
-            sim_place_order as sim_place_order_raw,
-        )
-        print("[系统] 运行于【本地模拟账户】模式。")
-    else:
-        print("[系统] 运行于【真实KuCoin账户】模式。")
-        get_account_balances = api.get_account_holdings
-        get_positions = api.get_account_holdings
-        place_order = api.place_order
+    positions = {k: v for k, v in positions.items() if Decimal(str(v.get("amount", 0))) > 0}
+    print("🪙 当前持仓市值与成本：")
+    hold_total_cost, hold_total_value = Decimal("0"), Decimal("0")
+    for symbol, pos in positions.items():
+        entry = Decimal(str(pos.get("entry_price", 0)))
+        amount = Decimal(str(pos.get("amount", 0)))
+        cost = entry * amount
+        cur_price = get_price_with_map(symbol, price_map, api)
+        value = (cur_price or Decimal("0")) * amount
+        pnl_pct = ((value - cost) / cost * 100) if cost > 0 else Decimal("0")
+        print(f" - {symbol:>12}: 持仓 {amount:.4f}，买入成本 {cost:.2f}，现价市值 {value:.2f}，盈亏 {pnl_pct:.2f}%")
+        hold_total_cost += cost
+        hold_total_value += value
+    print(f"📊 持仓总成本: {hold_total_cost:.2f}，现价总市值: {hold_total_value:.2f}，盈亏 {((hold_total_value-hold_total_cost)/hold_total_cost*100) if hold_total_cost else 0:.2f}%\n")
 
-    all_symbols = api.get_supported_symbols()
-    total = len(all_symbols)
-    print(f"[主控] 共获取到 {total} 个交易对，开始多线程评分...")
+    sell_list = []
+    now = time.strftime('%Y-%m-%d %H:%M:%S')
 
-    max_workers = CONFIG.get("MAX_WORKERS", DEFAULT_WORKERS)
-    sleep_time = CONFIG.get("WORKER_SLEEP", 0.18)
-
-    price_map = get_all_tickers(api)
-
-    progress_counter["done"] = 0
-    progress_thread = threading.Thread(target=progress_watcher, args=(total,))
-    progress_thread.daemon = True
-    progress_thread.start()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        results = list(executor.map(lambda sym: fetch_score(sym, sleep_time), all_symbols))
-
-    progress_thread.join()
-
-    filtered_scores = {}
-    turnover_filtered = 0
-    blacklist_filtered = 0
-    cooldown_filtered = 0
-    newcoin_filtered = 0
-    extreme_filtered = 0
-
-    for symbol, score_data in results:
-        turnover = score_data.get("turnover", 0)
-        if turnover < MIN_TURNOVER_1H:
-            turnover_filtered += 1
+    # === 卖出逻辑 ===
+    for symbol, pos in positions.items():
+        try:
+            entry = Decimal(str(pos.get("entry_price", 0)))
+            amount = Decimal(str(pos.get("amount", 0)))
+        except Exception as e:
+            print(f"[异常] 解析持仓数据失败 {symbol}: {e}")
             continue
-        if symbol in get_blacklist():
-            blacklist_filtered += 1
+        current_price = get_price_with_map(symbol, price_map, api)
+        if entry is None or entry <= 0:
             continue
-        if is_symbol_in_cooldown(symbol):
-            cooldown_filtered += 1
+        if current_price is None or current_price <= 0:
             continue
-        if score_data.get("is_new_coin", False):
-            newcoin_filtered += 1
-            continue
-        if score_data.get("is_extreme", False):
-            extreme_filtered += 1
-            continue
-        filtered_scores[symbol] = score_data.get("score", 0)
+        pnl_pct = (current_price - entry) / entry
+        if pnl_pct >= TAKE_PROFIT:
+            print(f"✅ 止盈：卖出 {symbol} 盈利 +{pnl_pct:.2%}")
+            sell_list.append(symbol)
+        elif pnl_pct <= STOP_LOSS:
+            print(f"⛔ 止损：卖出 {symbol} 亏损 {pnl_pct:.2%}")
+            sell_list.append(symbol)
+            _symbol_buy_cooldown[symbol] = COOLDOWN_AFTER_LOSS
+            _blacklist.add(symbol)
+        elif symbol not in top_symbols:
+            print(f"📉 排名跌出Top：卖出 {symbol}")
+            sell_list.append(symbol)
 
-    print(f"[过滤] 本轮共 {turnover_filtered}/{total} 个币种因成交额不足 {MIN_TURNOVER_1H} USDT 被过滤。")
-    print(f"[过滤] 本轮共 {blacklist_filtered}/{total} 个币种因黑名单被过滤。")
-    print(f"[过滤] 本轮共 {cooldown_filtered}/{total} 个币种因冷却期被过滤。")
-    print(f"[过滤] 本轮共 {newcoin_filtered}/{total} 个币种因新币被过滤。")
-    print(f"[过滤] 本轮共 {extreme_filtered}/{total} 个币种因极端行情被过滤。")
-    print(f"[过滤] 本轮剩余 {len(filtered_scores)}/{total} 个币种进入下一轮筛选。")
+    # === 执行卖出 ===
+    for symbol in sell_list:
+        pos = positions.get(symbol)
+        if not pos:
+            continue
+        result = place_order("sell", symbol, pos["amount"], None, now_time=now)
+        if result:
+            print(f"[调仓] ✅ 卖出 {symbol} 成功")
+        else:
+            print(f"[调仓] ❌ 卖出 {symbol} 失败")
 
-    if not filtered_scores:
-        print("[主控] ⚠️ 没有可用的币种（全部被过滤）。")
+    if not is_simulate:
+        usdt_avail = Decimal(str(balances.get("USDT", 0)))
+    print("\n[调仓] 卖出后账户快照：")
+    print(f"  - 可用USDT: {usdt_avail:.2f}")
+    for symbol in sell_list:
+        positions.pop(symbol, None)
+    hold_total_value = Decimal("0")
+    for symbol, pos in positions.items():
+        cur_price = get_price_with_map(symbol, price_map, api)
+        if cur_price:
+            hold_total_value += cur_price * Decimal(str(pos.get("amount", 0)))
+    print(f"  - 持仓币种市值合计: {hold_total_value:.2f}\n")
+
+    if usdt_avail <= 1:
+        print(f"[调仓] 💰 USDT 余额不足（{usdt_avail}），停止买入")
         return
 
-    top_n = CONFIG.get("TOP_N", 5)
-    top_symbols = sorted(filtered_scores, key=filtered_scores.get, reverse=True)[:top_n]
-    print(f"\n[主控] 本轮Top评分币种（已过滤）: {top_symbols}")
+    max_alloc = (usdt_total * MAX_ALLOC_PER_SYMBOL).quantize(USDT_STEP, rounding=ROUND_DOWN)
+    buy_count = 0
 
-    balances = get_account_balances()
-    positions = get_positions()
-    print(f"[主控] 当前账户余额: {balances}")
-    print(f"[主控] 当前虚拟持仓: {positions}")
+    # === 买入逻辑 ===
+    for symbol in top_symbols:
+        if symbol in positions:
+            print(f"[调仓] 🟡 已持有 {symbol}，跳过")
+            continue
+        if symbol in _blacklist:
+            print(f"[调仓] ⛔ 黑名单跳过 {symbol}")
+            continue
+        if _symbol_buy_cooldown.get(symbol, 0) > 0:
+            print(f"[调仓] ⏳ 冷却中跳过 {symbol}")
+            continue
 
-    # --- 汇总资产并打印 ---
-    total_value, total_cost, details = get_portfolio_stats(positions, price_map)
-    print(f"[主控] 持仓总市值：{total_value:.2f} USDT，持仓成本：{total_cost:.2f} USDT，浮盈亏：{total_value-total_cost:.2f} USDT")
-    for sym, amt, entry, price, val, cost in details:
-        print(f"   - {sym}: 数量{amt:.4f}, 买入{entry}, 现价{price}, 市值{val:.2f}, 盈亏{val-cost:.2f}")
+        buy_amount = min(usdt_avail, max_alloc).quantize(USDT_STEP, rounding=ROUND_DOWN)
+        if buy_amount < Decimal("5"):
+            print(f"[调仓] ⚠️ 资金不足跳过 {symbol}")
+            continue
 
-    # ------ 关键：模拟盘下单始终用市价 --------
-    if CONFIG.get("SIMULATE"):
-        def place_order(side, symbol, amount, price=None, now_time=None):
-            # price_map是最新市价映射
-            return sim_place_order_raw(
-                side, symbol, amount, price, now_time,
-                market_price=price_map.get(symbol)
-            )
-    # ------------------------------------------
+        result = place_order("buy", symbol, float(buy_amount), None, now_time=now)
+        if result:
+            print(f"[调仓] ✅ 买入 {symbol} 成功，金额 {buy_amount}")
+            usdt_avail -= buy_amount
+            buy_count += 1
+            cur_price = get_price_with_map(symbol, price_map, api)
+            if cur_price:
+                hold_total_value += cur_price * buy_amount
+        else:
+            print(f"[调仓] ❌ 买入 {symbol} 失败")
 
-    rebalance_portfolio(
-        top_symbols=top_symbols,
-        balances=balances,
-        positions=positions,
-        place_order=place_order,
-        price_map=price_map
-    )
+        if usdt_avail < Decimal("5"):
+            print(f"[调仓] 💸 余额耗尽，结束买入")
+            break
 
-    elapsed = time.time() - start_time
-    print(f"[主控] 本轮运行完成，耗时{elapsed:.2f}秒")
+    print("\n[调仓] 买入后账户快照：")
+    print(f"  - 可用USDT: {usdt_avail:.2f}")
+    print(f"  - 持仓币种市值合计: {hold_total_value:.2f}\n")
 
-if __name__ == "__main__":
-    main()
+    for s in list(_symbol_buy_cooldown.keys()):
+        _symbol_buy_cooldown[s] -= 1
+        if _symbol_buy_cooldown[s] <= 0:
+            del _symbol_buy_cooldown[s]
+
+    print(f"[调仓] ✅ 调仓结束，共买入 {buy_count} 个币种")
+
+def get_blacklist():
+    return _blacklist
+
+def is_symbol_in_cooldown(symbol):
+    return _symbol_buy_cooldown.get(symbol, 0) > 0
