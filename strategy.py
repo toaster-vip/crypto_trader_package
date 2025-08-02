@@ -1,5 +1,3 @@
-# strategy.py
-
 import time
 import numpy as np
 import pandas as pd
@@ -49,114 +47,9 @@ def get_klines(symbol, interval='1hour', limit=100, max_retries=3, idx=None, tot
     print(f"\n[❌] 多次重试失败，放弃：{symbol}")
     return None
 
-# === 策略打分 ===
+# --- 各项指标评分函数同你原代码，省略重复 ---
 
-def score_rsi(df):
-    delta = df['close'].diff()
-    up = delta.clip(lower=0)
-    down = -delta.clip(upper=0)
-    avg_gain = up.rolling(14).mean()
-    avg_loss = down.rolling(14).mean()
-    rs = avg_gain / (avg_loss + 1e-6)
-    rsi = 100 - (100 / (1 + rs))
-    val = rsi.iloc[-1]
-    if val < 30:
-        return min(1.0, (30 - val) / 30)
-    elif val > 70:
-        return -min(1.0, (val - 70) / 30)
-    return 0
-
-def score_macd(df):
-    ema12 = df['close'].ewm(span=12).mean()
-    ema26 = df['close'].ewm(span=26).mean()
-    macd = ema12 - ema26
-    signal = macd.ewm(span=9).mean()
-    diff = macd.iloc[-1] - signal.iloc[-1]
-    return max(-1, min(1, diff / df['close'].iloc[-1]))
-
-def score_ma(df):
-    ma_short = df['close'].rolling(5).mean()
-    ma_long = df['close'].rolling(20).mean()
-    diff = ma_short.iloc[-1] - ma_long.iloc[-1]
-    return max(-1, min(1, diff / df['close'].iloc[-1]))
-
-def score_momentum(df):
-    recent = df['close'].iloc[-1]
-    past_avg = df['close'].rolling(10).mean().iloc[-2]
-    diff = (recent - past_avg) / past_avg
-    return max(-1, min(1, diff * 5))
-
-def score_adx(df, period=14):
-    high, low, close = df['high'], df['low'], df['close']
-    plus_dm = (high.diff()).clip(lower=0)
-    minus_dm = (-low.diff()).clip(lower=0)
-    tr = pd.concat([
-        high - low,
-        abs(high - close.shift()),
-        abs(low - close.shift())
-    ], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean()
-    plus_di = 100 * plus_dm.rolling(period).mean() / (atr + 1e-6)
-    minus_di = 100 * minus_dm.rolling(period).mean() / (atr + 1e-6)
-    dx = (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-6)) * 100
-    adx = dx.rolling(period).mean()
-    score = (adx.iloc[-1] - 20) / 25
-    return max(-1, min(1, score))
-
-def score_obv(df):
-    obv = [0]
-    for i in range(1, len(df)):
-        if df['close'].iloc[i] > df['close'].iloc[i - 1]:
-            obv.append(obv[-1] + df['volume'].iloc[i])
-        elif df['close'].iloc[i] < df['close'].iloc[i - 1]:
-            obv.append(obv[-1] - df['volume'].iloc[i])
-        else:
-            obv.append(obv[-1])
-    slope = pd.Series(obv).diff().rolling(5).mean().iloc[-1]
-    return max(-1, min(1, slope / (np.mean(obv[-10:]) + 1e-6)))
-
-def score_cci(df, period=20):
-    tp = (df['high'] + df['low'] + df['close']) / 3
-    ma = tp.rolling(period).mean()
-    md = tp.rolling(period).apply(lambda x: np.mean(np.abs(x - np.mean(x))))
-    cci = (tp - ma) / (0.015 * md + 1e-6)
-    val = cci.iloc[-1]
-    return max(-1, min(1, val / 200))
-
-def score_kdj(df):
-    low_min = df['low'].rolling(9).min()
-    high_max = df['high'].rolling(9).max()
-    rsv = (df['close'] - low_min) / (high_max - low_min + 1e-6) * 100
-    k = rsv.ewm(com=2).mean()
-    d = k.ewm(com=2).mean()
-    j = 3 * k - 2 * d
-    val = max(0, min(100, j.iloc[-1]))
-    return max(-1, min(1, (50 - val) / 50))
-
-def score_sar(df):
-    close = df['close']
-    trend = close.iloc[-1] > close.iloc[-2]
-    diff = abs(close.iloc[-1] - close.iloc[-2]) / (close.iloc[-2] + 1e-6)
-    return round(diff if trend else -diff, 3)
-
-def score_bollinger(df, period=20, num_std=2):
-    close = df['close']
-    ma = close.rolling(period).mean()
-    std = close.rolling(period).std()
-    upper = ma + num_std * std
-    lower = ma - num_std * std
-    val = close.iloc[-1]
-    if val > upper.iloc[-1]:
-        return (val - upper.iloc[-1]) / std.iloc[-1]
-    elif val < lower.iloc[-1]:
-        return (val - lower.iloc[-1]) / std.iloc[-1]
-    return 0
-
-def score_volume_spike(df, window=20, spike_threshold=2.0):
-    vol_now = df['volume'].iloc[-1]
-    vol_avg = df['volume'].rolling(window).mean().iloc[-2]
-    ratio = vol_now / (vol_avg + 1e-6)
-    return min(1.0, ratio - 1.0) if ratio > spike_threshold else 0
+# 省略这里，保留你原有的score_rsi等函数，实现保持一致
 
 # === 综合评分 ===
 
@@ -167,8 +60,19 @@ def get_symbol_score(symbol, idx=None, total=None):
             "score": 0,
             "volume": 0,
             "turnover": 0,
-            "open": 0
+            "open": 0,
+            "is_new_coin": True,    # 新币直接标记True
+            "is_extreme": False
         }
+    # 判断新币（成交量均值低于阈值，可调整阈值）
+    VOLUME_THRESHOLD = 50  # 你可以调整阈值，单位与数据对应
+    is_new_coin = df['volume'].iloc[-30:].mean() < VOLUME_THRESHOLD
+
+    # 判断极端行情（近一根涨跌幅超过阈值）
+    PCT_THRESHOLD = 0.3  # 30%涨跌幅，可调整
+    recent_pct_change = (df['close'].iloc[-1] - df['open'].iloc[-1]) / (df['open'].iloc[-1] + 1e-6)
+    is_extreme = abs(recent_pct_change) > PCT_THRESHOLD
+
     scores = {
         "rsi": score_rsi(df),
         "macd": score_macd(df),
@@ -186,15 +90,17 @@ def get_symbol_score(symbol, idx=None, total=None):
     for key, score in scores.items():
         weight = STRATEGY.get(f"{key.upper()}_WEIGHT", 0)
         total_score += score * weight
+
     return {
         "score": round(total_score, 3),
         "volume": float(df['volume'].iloc[-1]),
         "turnover": float(df['turnover'].iloc[-1]),
-        "open": float(df['open'].iloc[-1])
+        "open": float(df['open'].iloc[-1]),
+        "is_new_coin": is_new_coin,
+        "is_extreme": is_extreme
     }
 
-# === 包装器 ===
-
+# 包装器保持不变
 def wrap_with_timing_and_cooldown(fn):
     def wrapper(*args, **kwargs):
         print(f"\n⏱️ 开始全币种评分分析...")
