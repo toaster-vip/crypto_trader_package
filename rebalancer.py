@@ -14,6 +14,9 @@ MAX_ALLOC_PER_SYMBOL = Decimal(str(CONFIG.get("MAX_POSITION_RATIO", 0.10)))
 COOLDOWN_AFTER_LOSS = 3
 USDT_STEP = Decimal("0.01")
 
+# 移动止损比例（例如回撤3%触发止损）
+TRAILING_STOP_PCT = Decimal("0.03")
+
 def get_price_with_map(symbol, price_map, api_client):
     if price_map and symbol in price_map and price_map[symbol] is not None:
         return Decimal(str(price_map[symbol]))
@@ -33,6 +36,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     usdt_total = Decimal(str(CONFIG.get("SIM_START_BALANCE", 100))) if is_simulate else raw_usdt
     usdt_avail = raw_usdt
 
+    # 只保留有持仓数量的币种
     positions = {k: v for k, v in positions.items() if Decimal(str(v.get("amount", 0))) > 0}
     print("🪙 当前持仓市值与成本：")
     hold_total_cost, hold_total_value = Decimal("0"), Decimal("0")
@@ -51,27 +55,45 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     sell_list = []
     now = time.strftime('%Y-%m-%d %H:%M:%S')
 
-    # === 卖出逻辑 ===
+    # === 卖出逻辑，增加移动止损机制 ===
     for symbol, pos in positions.items():
         try:
-            entry = Decimal(str(pos.get("entry_price", 0)))
             amount = Decimal(str(pos.get("amount", 0)))
+            # 取动态基准价 base_price 和最高价 max_price，没有则用 entry_price 初始化
+            base_price = Decimal(str(pos.get("base_price", pos.get("entry_price", "0"))))
+            max_price = Decimal(str(pos.get("max_price", base_price)))
         except Exception as e:
             print(f"[异常] 解析持仓数据失败 {symbol}: {e}")
             continue
+
         current_price = get_price_with_map(symbol, price_map, api)
-        if entry is None or entry <= 0:
+        if base_price <= 0 or current_price is None or current_price <= 0:
             continue
-        if current_price is None or current_price <= 0:
-            continue
-        pnl_pct = (current_price - entry) / entry
+
+        # 更新 max_price（历史最高价）
+        if current_price > max_price:
+            max_price = current_price
+            # 这里直接更新base_price为max_price，实现“锁定新基准”
+            base_price = max_price
+            # 更新持仓字典，方便下次使用（需要后续写入仓位管理）
+            pos["base_price"] = str(base_price)
+            pos["max_price"] = str(max_price)
+
+        # 计算当前收益率基于 base_price
+        pnl_pct = (current_price - base_price) / base_price
+
+        # 计算移动止损触发价格
+        trailing_stop_price = max_price * (Decimal("1") - TRAILING_STOP_PCT)
+
         reason = ""
+        # 止盈条件
         if pnl_pct >= TAKE_PROFIT:
             print(f"✅ 止盈：卖出 {symbol} 盈利 +{pnl_pct:.2%}")
             sell_list.append(symbol)
             reason = "TAKE_PROFIT"
-        elif pnl_pct <= STOP_LOSS:
-            print(f"⛔ 止损：卖出 {symbol} 亏损 {pnl_pct:.2%}")
+        # 止损条件（固定止损或移动止损）
+        elif pnl_pct <= STOP_LOSS or current_price <= trailing_stop_price:
+            print(f"⛔ 止损：卖出 {symbol} 亏损 {pnl_pct:.2%}（当前价：{current_price}，移动止损价：{trailing_stop_price}）")
             sell_list.append(symbol)
             _symbol_buy_cooldown[symbol] = COOLDOWN_AFTER_LOSS
             _blacklist.add(symbol)
@@ -87,7 +109,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
                 "type": "sell",
                 "symbol": symbol,
                 "amount": float(amount),
-                "entry_price": float(entry),
+                "base_price": float(base_price),
                 "current_price": float(current_price or 0),
                 "pnl_pct": float(pnl_pct),
                 "reason": reason
@@ -149,6 +171,12 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             cur_price = get_price_with_map(symbol, price_map, api)
             if cur_price:
                 hold_total_value += cur_price * buy_amount
+
+            # 记录买入时的base_price和max_price，初始化为买入价格
+            pos = positions.get(symbol, {})
+            pos["base_price"] = str(cur_price)
+            pos["max_price"] = str(cur_price)
+            positions[symbol] = pos
 
             log_trade({
                 "timestamp": now,
