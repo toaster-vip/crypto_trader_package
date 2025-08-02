@@ -5,12 +5,13 @@ from config import CONFIG, LOG_DIR
 from strategy import get_symbol_score
 from notifier import send_serverchan_notification
 from kucoin_api import KuCoinClient
-from rebalancer import rebalance_portfolio, get_blacklist, is_symbol_in_cooldown  # 补充此行
+from rebalancer import rebalance_portfolio, get_blacklist, is_symbol_in_cooldown
+from trade_logger import log_round_snapshot   # 日志模块
 import requests
 
 DEFAULT_WORKERS = 10
 MIN_TURNOVER_1H = CONFIG.get("MIN_TURNOVER_1H", 5000)
-MAX_NEWCOIN_DAYS = 7  # 新币判定天数，可配合strategy使用
+MAX_NEWCOIN_DAYS = 7
 progress_counter = {"done": 0}
 
 def fetch_score(symbol, sleep_time=0.18):
@@ -20,7 +21,7 @@ def fetch_score(symbol, sleep_time=0.18):
         return symbol, score_data
     except Exception as e:
         print(f"[WARN] 获取 {symbol} 评分失败: {e}")
-        # 给所有必需的字段默认值
+        # 默认值全补
         return symbol, {"score": -999, "turnover": 0, "is_new_coin": True, "is_extreme": False}
     finally:
         progress_counter["done"] += 1
@@ -104,7 +105,6 @@ def main():
 
     progress_thread.join()
 
-    # 各类过滤
     filtered_scores = {}
     turnover_filtered = 0
     blacklist_filtered = 0
@@ -157,7 +157,29 @@ def main():
     for sym, amt, entry, price, val, cost in details:
         print(f"   - {sym}: 数量{amt:.4f}, 买入{entry}, 现价{price}, 市值{val:.2f}, 盈亏{val-cost:.2f}")
 
-    # 模拟盘下单用市价
+    # 日志落盘：本轮快照
+    log_round_snapshot({
+        "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
+        "account": balances,
+        "positions": positions,
+        "top_symbols": top_symbols,
+        "filter_count": {
+            "turnover": turnover_filtered,
+            "blacklist": blacklist_filtered,
+            "cooldown": cooldown_filtered,
+            "newcoin": newcoin_filtered,
+            "extreme": extreme_filtered,
+        },
+        "params": {
+            "TAKE_PROFIT": CONFIG.get("TAKE_PROFIT"),
+            "STOP_LOSS": CONFIG.get("STOP_LOSS"),
+            "MAX_POSITION_RATIO": CONFIG.get("MAX_POSITION_RATIO"),
+            "MIN_TURNOVER_1H": MIN_TURNOVER_1H,
+            "TOP_N": top_n
+        }
+    })
+
+    # ------ 关键：模拟盘下单始终用市价 --------
     if CONFIG.get("SIMULATE"):
         def place_order(side, symbol, amount, price=None, now_time=None):
             return sim_place_order_raw(
