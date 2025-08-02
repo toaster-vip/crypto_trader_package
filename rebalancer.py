@@ -1,9 +1,9 @@
-# rebalancer.py
 import time
 from decimal import Decimal, ROUND_DOWN
 from config import CONFIG, TRADE
 from notifier import send_serverchan_notification
 from kucoin_api import KuCoinClient
+from trade_logger import log_trade, log_rebalance
 
 _blacklist = set()
 _symbol_buy_cooldown = {}
@@ -65,17 +65,33 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         if current_price is None or current_price <= 0:
             continue
         pnl_pct = (current_price - entry) / entry
+        reason = ""
         if pnl_pct >= TAKE_PROFIT:
             print(f"✅ 止盈：卖出 {symbol} 盈利 +{pnl_pct:.2%}")
             sell_list.append(symbol)
+            reason = "TAKE_PROFIT"
         elif pnl_pct <= STOP_LOSS:
             print(f"⛔ 止损：卖出 {symbol} 亏损 {pnl_pct:.2%}")
             sell_list.append(symbol)
             _symbol_buy_cooldown[symbol] = COOLDOWN_AFTER_LOSS
             _blacklist.add(symbol)
+            reason = "STOP_LOSS"
         elif symbol not in top_symbols:
             print(f"📉 排名跌出Top：卖出 {symbol}")
             sell_list.append(symbol)
+            reason = "DROPPED_TOP"
+
+        if symbol in sell_list:
+            log_trade({
+                "timestamp": now,
+                "type": "sell",
+                "symbol": symbol,
+                "amount": float(amount),
+                "entry_price": float(entry),
+                "current_price": float(current_price or 0),
+                "pnl_pct": float(pnl_pct),
+                "reason": reason
+            })
 
     # === 执行卖出 ===
     for symbol in sell_list:
@@ -133,6 +149,15 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             cur_price = get_price_with_map(symbol, price_map, api)
             if cur_price:
                 hold_total_value += cur_price * buy_amount
+
+            log_trade({
+                "timestamp": now,
+                "type": "buy",
+                "symbol": symbol,
+                "amount": float(buy_amount),
+                "price": float(cur_price or 0),
+                "reason": "REBALANCE_BUY"
+            })
         else:
             print(f"[调仓] ❌ 买入 {symbol} 失败")
 
@@ -148,6 +173,15 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         _symbol_buy_cooldown[s] -= 1
         if _symbol_buy_cooldown[s] <= 0:
             del _symbol_buy_cooldown[s]
+
+    log_rebalance({
+        "timestamp": now,
+        "top_symbols": top_symbols,
+        "buy_count": buy_count,
+        "sell_list": sell_list,
+        "hold_value": float(hold_total_value),
+        "usdt_avail": float(usdt_avail),
+    })
 
     print(f"[调仓] ✅ 调仓结束，共买入 {buy_count} 个币种")
 
