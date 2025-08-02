@@ -32,3 +32,7 @@ def log_error(error_msg: str, context: dict = None):
     if context:
         err.update(context)
     log_event(err)
+
+def log_rebalance(rebalance_info: dict):
+    """每轮调仓的详细日志"""
+    log_event({"type": "rebalance", **rebalance_info})
