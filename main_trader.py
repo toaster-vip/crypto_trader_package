@@ -10,16 +10,17 @@ import requests
 
 DEFAULT_WORKERS = 10
 MIN_TURNOVER_1H = CONFIG.get("MIN_TURNOVER_1H", 5000)
+MAX_NEWCOIN_DAYS = 7  # 如果你想结合币上线时间判定可调整
 progress_counter = {"done": 0}
 
 def fetch_score(symbol, sleep_time=0.18):
     try:
         time.sleep(sleep_time)
         score_data = get_symbol_score(symbol)
-        return symbol, score_data.get("score", 0), score_data.get("turnover", 0)
+        return symbol, score_data
     except Exception as e:
         print(f"[WARN] 获取 {symbol} 评分失败: {e}")
-        return symbol, -999, 0
+        return symbol, {"score": -999, "turnover": 0, "is_new_coin": True, "is_extreme": False}
     finally:
         progress_counter["done"] += 1
 
@@ -106,8 +107,11 @@ def main():
     turnover_filtered = 0
     blacklist_filtered = 0
     cooldown_filtered = 0
+    newcoin_filtered = 0
+    extreme_filtered = 0
 
-    for symbol, score, turnover in results:
+    for symbol, score_data in results:
+        turnover = score_data.get("turnover", 0)
         if turnover < MIN_TURNOVER_1H:
             turnover_filtered += 1
             continue
@@ -117,11 +121,19 @@ def main():
         if is_symbol_in_cooldown(symbol):
             cooldown_filtered += 1
             continue
-        filtered_scores[symbol] = score
+        if score_data.get("is_new_coin", False):
+            newcoin_filtered += 1
+            continue
+        if score_data.get("is_extreme", False):
+            extreme_filtered += 1
+            continue
+        filtered_scores[symbol] = score_data.get("score", 0)
 
     print(f"[过滤] 本轮共 {turnover_filtered}/{total} 个币种因成交额不足 {MIN_TURNOVER_1H} USDT 被过滤。")
     print(f"[过滤] 本轮共 {blacklist_filtered}/{total} 个币种因黑名单被过滤。")
     print(f"[过滤] 本轮共 {cooldown_filtered}/{total} 个币种因冷却期被过滤。")
+    print(f"[过滤] 本轮共 {newcoin_filtered}/{total} 个币种因新币被过滤。")
+    print(f"[过滤] 本轮共 {extreme_filtered}/{total} 个币种因极端行情被过滤。")
     print(f"[过滤] 本轮剩余 {len(filtered_scores)}/{total} 个币种进入下一轮筛选。")
 
     if not filtered_scores:
