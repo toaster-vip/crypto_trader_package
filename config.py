@@ -39,6 +39,7 @@ CONFIG = {
 
     # ==== 其它 ====
     "SIMULATE": True,                   # 是否使用模拟盘
+    "GIT_BRANCH": "update"
 }
 
 TRADE = {
