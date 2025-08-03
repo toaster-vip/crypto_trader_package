@@ -10,9 +10,9 @@ SIM_BALANCE_FILE = os.path.join(LOG_DIR, CONFIG.get("SIM_BALANCE_FILE", "balance
 SIM_POSITION_FILE = os.path.join(LOG_DIR, CONFIG.get("SIM_POSITION_FILE", "positions_sim.json"))
 SIM_LOG_FILE = os.path.join(LOG_DIR, CONFIG.get("SIM_LOG_FILE", "orders_sim.log"))
 
-FEE_RATE = Decimal(str(CONFIG["FEE"]["TAKER"]))
+FEE_RATE = Decimal(str(CONFIG["FEE_RATE"]))
 START_BALANCE = Decimal(str(CONFIG.get("SIM_START_BALANCE", 10000)))
-MIN_TRADE_USDT = Decimal(str(CONFIG.get("MIN_TRADE_USDT", 5)))
+MIN_BUY_AMOUNT = Decimal(str(CONFIG.get("MIN_BUY_AMOUNT", 5)))  # 与 config 保持一致
 
 def load_json(filepath, default):
     if os.path.exists(filepath):
@@ -67,7 +67,7 @@ def sim_place_order(side, symbol, amount, price=None, now_time=None, market_pric
         cost = (qty * final_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
         fee = (cost * FEE_RATE).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
         total = cost + fee
-        if Decimal(str(balances.get("USDT", 0))) < total or total < MIN_TRADE_USDT:
+        if Decimal(str(balances.get("USDT", 0))) < total or total < MIN_BUY_AMOUNT:
             print(f"[SIM] USDT不足或金额过小，买入失败: 需{total}, 余额{balances.get('USDT', 0)}")
             return None
         balances["USDT"] = float(Decimal(str(balances["USDT"])) - total)
