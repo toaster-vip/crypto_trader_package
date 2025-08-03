@@ -55,7 +55,7 @@ cd "$PROJECT_DIR" || {
 }
 
 # ========== 拉取最新 Git 代码（可选，切换分支） ==========
-TARGET_BRANCH="dev"  # ← 这里改成你要的分支
+TARGET_BRANCH="update"  # ← 这里改成你要的分支
 
 log "🔄 尝试切换并拉取 Git 分支 $TARGET_BRANCH ..."
 git fetch origin
