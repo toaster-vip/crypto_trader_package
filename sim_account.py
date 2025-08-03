@@ -1,14 +1,18 @@
+# ================== sim_account.py ==================
+# 所有模拟参数取自 config.py，包含手续费、起始资金、最小成交额等
+
 import os
 import json
 from decimal import Decimal, ROUND_DOWN
 from config import CONFIG, LOG_DIR
 
-SIM_BALANCE_FILE = os.path.join(LOG_DIR, "balance_sim.json")
-SIM_POSITION_FILE = os.path.join(LOG_DIR, "positions_sim.json")
-SIM_LOG_FILE = os.path.join(LOG_DIR, "orders_sim.log")
+SIM_BALANCE_FILE = os.path.join(LOG_DIR, CONFIG.get("SIM_BALANCE_FILE", "balance_sim.json"))
+SIM_POSITION_FILE = os.path.join(LOG_DIR, CONFIG.get("SIM_POSITION_FILE", "positions_sim.json"))
+SIM_LOG_FILE = os.path.join(LOG_DIR, CONFIG.get("SIM_LOG_FILE", "orders_sim.log"))
 
 FEE_RATE = Decimal(str(CONFIG["FEE"]["TAKER"]))
 START_BALANCE = Decimal(str(CONFIG.get("SIM_START_BALANCE", 10000)))
+MIN_TRADE_USDT = Decimal(str(CONFIG.get("MIN_TRADE_USDT", 5)))
 
 def load_json(filepath, default):
     if os.path.exists(filepath):
@@ -63,14 +67,13 @@ def sim_place_order(side, symbol, amount, price=None, now_time=None, market_pric
         cost = (qty * final_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
         fee = (cost * FEE_RATE).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
         total = cost + fee
-        if Decimal(str(balances.get("USDT", 0))) < total:
-            print(f"[SIM] USDT不足，买入失败: 需{total}, 余额{balances.get('USDT', 0)}")
+        if Decimal(str(balances.get("USDT", 0))) < total or total < MIN_TRADE_USDT:
+            print(f"[SIM] USDT不足或金额过小，买入失败: 需{total}, 余额{balances.get('USDT', 0)}")
             return None
         balances["USDT"] = float(Decimal(str(balances["USDT"])) - total)
         positions.setdefault(symbol, {"amount": 0, "entry_price": 0, "last_update": time_str})
         prev_amt = Decimal(str(positions[symbol]["amount"]))
         new_amt = prev_amt + qty
-        # 加权新均价
         new_cost = (prev_amt * Decimal(str(positions[symbol]["entry_price"])) + cost) / new_amt if new_amt > 0 else Decimal("0")
         positions[symbol]["amount"] = float(new_amt)
         positions[symbol]["entry_price"] = float(new_cost)
@@ -116,3 +119,10 @@ def sim_place_order(side, symbol, amount, price=None, now_time=None, market_pric
     sim_update_balance(balances)
     sim_update_positions(positions)
     return result
+
+def sim_reset():
+    """重置模拟账户资产和仓位"""
+    save_json(SIM_BALANCE_FILE, {"USDT": float(START_BALANCE)})
+    save_json(SIM_POSITION_FILE, {})
+    open(SIM_LOG_FILE, "w").close()
+    print("[SIM] 模拟器已重置。")
