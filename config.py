@@ -1,8 +1,19 @@
-# config.py
+import os
 
 CONFIG = {
-    # ==== 账户与运行参数 ====
+    # ==== 账户与敏感信息 ====
+    "KUCOIN_API_KEY": os.getenv("KUCOIN_API_KEY"),
+    "KUCOIN_API_SECRET": os.getenv("KUCOIN_API_SECRET"),
+    "KUCOIN_API_PASSPHRASE": os.getenv("KUCOIN_API_PASSPHRASE"),
+    "SERVER_CHAN_KEY": os.getenv("SERVER_CHAN_KEY"),
+
+    # ==== 日志和运行参数 ====
+    "LOG_DIR": "trade_logs",
     "SIM_START_BALANCE": 100,           # 模拟盘初始资金
+    "SIMULATE": True,                   # 是否使用模拟盘
+    "GIT_BRANCH": "update",             # 默认Git分支
+
+    # ==== 资金分配与风控 ====
     "MAX_POSITION_RATIO": 0.10,         # 每币最大仓位比例
     "MIN_TURNOVER_1H": 5000,            # 最低1小时成交额过滤
     "MAX_WORKERS": 10,                  # 多线程最大数量
@@ -36,16 +47,14 @@ CONFIG = {
 
     # ==== 费用相关 ====
     "FEE_RATE": 0.00075,                # 模拟盘手续费率
-
-    # ==== 其它 ====
-    "SIMULATE": True,                   # 是否使用模拟盘
-    "GIT_BRANCH": "update"
 }
 
+# --- 兼容旧代码 ---
 TRADE = {
     "TAKE_PROFIT": CONFIG["TAKE_PROFIT"],
     "STOP_LOSS": CONFIG["STOP_LOSS"],
 }
+STRATEGY = {}  # 如需扩展，可单独写入策略相关dict
+LOG_DIR = CONFIG["LOG_DIR"]
 
-# 日志目录
-LOG_DIR = "trade_logs"
+# 推荐后续所有参数都用 CONFIG["xxx"] 读取！
