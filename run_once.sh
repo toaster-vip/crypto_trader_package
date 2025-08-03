@@ -54,11 +54,19 @@ cd "$PROJECT_DIR" || {
     exit 1
 }
 
-# ========== 拉取最新 Git 代码（可选） ==========
-log "🔄 尝试拉取 Git 最新代码..."
-git reset --hard HEAD
+# ========== 拉取最新 Git 代码（可选，切换分支） ==========
+TARGET_BRANCH="dev"  # ← 这里改成你要的分支
+
+log "🔄 尝试切换并拉取 Git 分支 $TARGET_BRANCH ..."
+git fetch origin
+git checkout $TARGET_BRANCH || {
+    log "❌ 切换分支失败，跳过执行"
+    rm -f "$LOCKFILE"
+    exit 1
+}
+git reset --hard origin/$TARGET_BRANCH
 git clean -fd
-git pull || {
+git pull origin $TARGET_BRANCH || {
     log "⚠️ Git 拉取失败，跳过执行"
     rm -f "$LOCKFILE"
     exit 1
