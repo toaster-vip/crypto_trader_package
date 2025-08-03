@@ -14,7 +14,7 @@ MAX_ALLOC_PER_SYMBOL = Decimal(str(CONFIG.get("MAX_POSITION_RATIO", 0.10)))
 COOLDOWN_AFTER_LOSS = 3
 USDT_STEP = Decimal("0.01")
 
-# 移动止损比例（例如回撤3%触发止损）
+# 移动止损比例
 TRAILING_STOP_PCT = Decimal("0.03")
 
 def get_price_with_map(symbol, price_map, api_client):
@@ -29,6 +29,14 @@ def get_price_with_map(symbol, price_map, api_client):
     return None
 
 def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None):
+    """
+    智能调仓核心逻辑，支持：
+      - 固定止盈止损
+      - 移动止损和动态基准价刷新
+      - 仓位黑名单与冷却
+      - 日志记录
+      - 低资金自动停止买入
+    """
     print("\n🔁 [调仓] 开始执行智能调仓逻辑")
     api = KuCoinClient()
     is_simulate = CONFIG.get("SIMULATE", True)
@@ -55,11 +63,10 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     sell_list = []
     now = time.strftime('%Y-%m-%d %H:%M:%S')
 
-    # === 卖出逻辑，增加移动止损机制 ===
+    # === 卖出逻辑（含动态基准价刷新/移动止损/固定止损）===
     for symbol, pos in positions.items():
         try:
             amount = Decimal(str(pos.get("amount", 0)))
-            # 取动态基准价 base_price 和最高价 max_price，没有则用 entry_price 初始化
             base_price = Decimal(str(pos.get("base_price", pos.get("entry_price", "0"))))
             max_price = Decimal(str(pos.get("max_price", base_price)))
         except Exception as e:
@@ -70,28 +77,24 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         if base_price <= 0 or current_price is None or current_price <= 0:
             continue
 
-        # 更新 max_price（历史最高价）
+        # === 动态基准价刷新（仅当创新高）===
         if current_price > max_price:
             max_price = current_price
-            # 这里直接更新base_price为max_price，实现“锁定新基准”
             base_price = max_price
-            # 更新持仓字典，方便下次使用（需要后续写入仓位管理）
             pos["base_price"] = str(base_price)
             pos["max_price"] = str(max_price)
 
-        # 计算当前收益率基于 base_price
+        # 收益率按最新base_price计算
         pnl_pct = (current_price - base_price) / base_price
-
-        # 计算移动止损触发价格
         trailing_stop_price = max_price * (Decimal("1") - TRAILING_STOP_PCT)
-
         reason = ""
-        # 止盈条件
+
+        # 止盈
         if pnl_pct >= TAKE_PROFIT:
             print(f"✅ 止盈：卖出 {symbol} 盈利 +{pnl_pct:.2%}")
             sell_list.append(symbol)
             reason = "TAKE_PROFIT"
-        # 止损条件（固定止损或移动止损）
+        # 固定止损 or 移动止损
         elif pnl_pct <= STOP_LOSS or current_price <= trailing_stop_price:
             print(f"⛔ 止损：卖出 {symbol} 亏损 {pnl_pct:.2%}（当前价：{current_price}，移动止损价：{trailing_stop_price}）")
             sell_list.append(symbol)
@@ -172,7 +175,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             if cur_price:
                 hold_total_value += cur_price * buy_amount
 
-            # 记录买入时的base_price和max_price，初始化为买入价格
+            # 初始化动态基准价和最高价
             pos = positions.get(symbol, {})
             pos["base_price"] = str(cur_price)
             pos["max_price"] = str(cur_price)
@@ -218,3 +221,12 @@ def get_blacklist():
 
 def is_symbol_in_cooldown(symbol):
     return _symbol_buy_cooldown.get(symbol, 0) > 0
+
+
+# ========= 补充说明和风险点 =========
+"""
+1. 本策略将已持有币如创新高则'刷新基准价'，不断“锁定”浮盈，这有助于防范回撤。
+2. 动态调整买入价和最大价时，可能导致频繁止损（尤其震荡行情），加大交易费用和滑点。
+3. 如需降低频繁止损风险，可设定最小回撤幅度或等待连续创新高才刷新基准价；或结合固定止损/移动止损双重判定。
+4. 日志建议每次决策后分析盈亏结构和频繁卖出原因，定期复盘优化触发条件。
+"""
