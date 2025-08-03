@@ -58,7 +58,7 @@ cd "$PROJECT_DIR" || {
 log "🔄 尝试拉取 Git 最新代码..."
 git reset --hard HEAD
 git clean -fd
-git pull || {
+git pull origin update || {
     log "⚠️ Git 拉取失败，跳过执行"
     rm -f "$LOCKFILE"
     exit 1
