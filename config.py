@@ -56,5 +56,6 @@ TRADE = {
 }
 STRATEGY = {}  # 如需扩展，可单独写入策略相关dict
 LOG_DIR = CONFIG["LOG_DIR"]
+SERVER_CHAN_KEY = CONFIG.get("SERVER_CHAN_KEY", None)
 
 # 推荐后续所有参数都用 CONFIG["xxx"] 读取！
