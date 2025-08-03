@@ -1,6 +1,3 @@
-# ================== sim_account.py ==================
-# 所有模拟参数取自 config.py，包含手续费、起始资金、最小成交额等
-
 import os
 import json
 from decimal import Decimal, ROUND_DOWN
@@ -12,7 +9,8 @@ SIM_LOG_FILE = os.path.join(LOG_DIR, CONFIG.get("SIM_LOG_FILE", "orders_sim.log"
 
 FEE_RATE = Decimal(str(CONFIG["FEE_RATE"]))
 START_BALANCE = Decimal(str(CONFIG.get("SIM_START_BALANCE", 10000)))
-MIN_BUY_AMOUNT = Decimal(str(CONFIG.get("MIN_BUY_AMOUNT", 5)))  # 与 config 保持一致
+MIN_BUY_AMOUNT = Decimal(str(CONFIG.get("MIN_BUY_AMOUNT", 5)))
+SIM_SLIPPAGE_PCT = Decimal(str(CONFIG.get("SIM_SLIPPAGE_PCT", 0)))   # 滑点默认0
 
 def load_json(filepath, default):
     if os.path.exists(filepath):
@@ -61,8 +59,14 @@ def sim_place_order(side, symbol, amount, price=None, now_time=None, market_pric
     amount = Decimal(str(amount))
     time_str = now_time or "now"
 
+    # ====== 滑点处理 ======
+    final_price = Decimal(str(market_price if market_price else price if price else 1))
     if side == "buy":
-        final_price = Decimal(str(market_price if market_price else price if price else 1))
+        final_price *= (1 + SIM_SLIPPAGE_PCT)
+    elif side == "sell":
+        final_price *= (1 - SIM_SLIPPAGE_PCT)
+
+    if side == "buy":
         qty = (amount / final_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
         cost = (qty * final_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
         fee = (cost * FEE_RATE).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
@@ -89,7 +93,6 @@ def sim_place_order(side, symbol, amount, price=None, now_time=None, market_pric
             "time": time_str
         }
     elif side == "sell":
-        final_price = Decimal(str(market_price if market_price else price if price else 1))
         prev_amt = Decimal(str(positions.get(symbol, {}).get("amount", 0)))
         if prev_amt < amount:
             print(f"[SIM] {symbol} 持仓不足，卖出失败: 要卖{amount}, 持有{prev_amt}")
