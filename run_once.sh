@@ -1,6 +1,7 @@
 #!/bin/bash
 
-#!/bin/bash
+# 分支名参数，默认 main
+TARGET_BRANCH="${1:-main}"
 
 # ✅ 加载 .env 环境变量（确保路径正确）
 export $(grep -v '^#' /home/linuxuser/crypto_trader_package/.env | xargs)
@@ -54,11 +55,17 @@ cd "$PROJECT_DIR" || {
     exit 1
 }
 
-# ========== 拉取最新 Git 代码（可选） ==========
-log "🔄 尝试拉取 Git 最新代码..."
-git reset --hard HEAD
+# ========== 拉取最新 Git 代码，动态切换分支 ==========
+log "🔄 尝试切换并拉取 Git 分支 $TARGET_BRANCH ..."
+git fetch origin
+git checkout $TARGET_BRANCH || {
+    log "❌ 切换分支失败，跳过执行"
+    rm -f "$LOCKFILE"
+    exit 1
+}
+git reset --hard origin/$TARGET_BRANCH
 git clean -fd
-git pull || {
+git pull origin $TARGET_BRANCH || {
     log "⚠️ Git 拉取失败，跳过执行"
     rm -f "$LOCKFILE"
     exit 1
