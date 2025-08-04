@@ -101,6 +101,13 @@ class KuCoinClient:
             return {}
 
     def place_order(self, symbol, side, size, price=None):
+        """
+        支持 DRY_RUN，config.py 只要 DRY_RUN=True，则只演练不会真的下单
+        """
+        if CONFIG.get("DRY_RUN", False):
+            print(f"[DRY_RUN] Would {side.upper()} {symbol} size={size} price={price if price else 'market'}")
+            return {"side": side, "symbol": symbol, "size": size, "price": price, "dry_run": True}
+
         endpoint = "/api/v1/orders"
         url = self.base_url + endpoint
         order_type = "market" if price is None else "limit"
