@@ -1,6 +1,7 @@
 #!/bin/bash
 
-#!/bin/bash
+# 分支名参数，默认 main
+TARGET_BRANCH="${1:-main}"
 
 # ✅ 加载 .env 环境变量（确保路径正确）
 export $(grep -v '^#' /home/linuxuser/crypto_trader_package/.env | xargs)
@@ -54,9 +55,8 @@ cd "$PROJECT_DIR" || {
     exit 1
 }
 
-# ========== 拉取最新 Git 代码（可选，切换分支） ==========
-TARGET_BRANCH="update"  # ← 这里改成你要的分支
-
+# ========== 拉取最新 Git 代码，动态切换分支 ==========
+TARGET_BRANCH="${1:-main}"  # 支持传参，也可直接修改这里默认分支
 log "🔄 尝试切换并拉取 Git 分支 $TARGET_BRANCH ..."
 git fetch origin
 git checkout $TARGET_BRANCH || {
