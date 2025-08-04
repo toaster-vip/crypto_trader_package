@@ -146,13 +146,27 @@ class KuCoinClient:
             return None
 
     def get_symbol_price(self, symbol):
+        """
+        支持币名自动补 -USDT，并安全处理所有情况
+        """
+        # 只要不是符号对（没有"-"），且不是主流稳定币，则拼接 -USDT
+        if "-" not in symbol and symbol not in ["USDT", "USDC", "USDD", "DAI", "BTC", "ETH"]:
+            query_symbol = f"{symbol}-USDT"
+        else:
+            query_symbol = symbol
+
         url = f"{self.base_url}/api/v1/market/orderbook/level1"
-        params = {"symbol": symbol}
+        params = {"symbol": query_symbol}
         try:
             response = requests.get(url, params=params)
             response.raise_for_status()
             data = response.json()
-            return float(data["data"]["price"])
+            # data 应该形如 {'code':..., 'data':{'symbol':..., 'price':...}}
+            if data and data.get("data") and data["data"].get("price"):
+                return float(data["data"]["price"])
+            else:
+                print(f"[WARN] 无法获取 {query_symbol} 最新价，API返回：{data}")
+                return None
         except Exception as e:
             print(f"[ERROR] 获取价格失败 {symbol}: {e}")
             return None
