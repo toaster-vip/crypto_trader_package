@@ -50,7 +50,7 @@ CONFIG = {
 
     # ==== 模拟滑点 ====
     "SIM_SLIPPAGE_PCT": 0.0003,         # 默认滑点0.03%
-    "DRY_RUN": True                     # True=只演练, False=真下单
+    "DRY_RUN": False                    #  True=只演练, False=真下单
 }
 
 # --- 兼容旧代码 ---
