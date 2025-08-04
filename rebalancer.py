@@ -26,7 +26,6 @@ def to_symbol_pair(symbol):
         return symbol + "-USDT"
 
 def get_price_with_map(symbol, price_map, api_client):
-    # symbol 应为交易对（如 ELON-USDT）
     if price_map and symbol in price_map and price_map[symbol] is not None:
         return Decimal(str(price_map[symbol]))
     try:
@@ -148,8 +147,12 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         else:
             print(f"[调仓] ❌ 卖出 {symbol} 失败")
 
-    if not is_simulate:
+    # === 卖出后，强制 sleep 保证资金到账，再拉余额 ===
+    if not is_simulate and not DRY_RUN and sell_list:
+        time.sleep(2)  # 可根据实际网络调整 2~3 秒
+        balances = api.get_account_holdings()
         usdt_avail = Decimal(str(balances.get("USDT", 0)))
+
     print("\n[调仓] 卖出后账户快照：")
     print(f"  - 可用USDT: {usdt_avail:.2f}")
     for symbol in sell_list:
