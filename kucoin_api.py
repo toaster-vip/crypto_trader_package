@@ -26,7 +26,6 @@ class KuCoinClient:
         passphrase = base64.b64encode(
             hmac.new(self.api_secret.encode(), self.passphrase.encode(), hashlib.sha256).digest()
         ).decode()
-
         return {
             "KC-API-KEY": self.api_key,
             "KC-API-SIGN": signature,
@@ -73,7 +72,6 @@ class KuCoinClient:
                 acc_type = acc.get("type", "")
                 available = acc.get("available") or acc.get("balance") or 0
                 balance = float(available)
-                # 打印所有账户类型和余额，便于调试
                 print(f"[DEBUG] type={acc_type}, currency={currency}, available={available}")
                 if balance > 0:
                     balances[currency] = balances.get(currency, 0) + balance
@@ -103,13 +101,9 @@ class KuCoinClient:
             return {}
 
     def place_order(self, symbol, side, size, price=None):
-        """
-        支持 DRY_RUN，config.py 只要 DRY_RUN=True，则只演练不会真的下单
-        """
         if CONFIG.get("DRY_RUN", False):
             print(f"[DRY_RUN] Would {side.upper()} {symbol} size={size} price={price if price else 'market'}")
             return {"side": side, "symbol": symbol, "size": size, "price": price, "dry_run": True}
-
         endpoint = "/api/v1/orders"
         url = self.base_url + endpoint
         order_type = "market" if price is None else "limit"
@@ -119,7 +113,6 @@ class KuCoinClient:
             "symbol": symbol,
             "type": order_type
         }
-
         if order_type == "market":
             if side == "buy":
                 body_dict["funds"] = str(size)
@@ -128,10 +121,8 @@ class KuCoinClient:
         else:
             body_dict["size"] = str(size)
             body_dict["price"] = str(price)
-
         body = json.dumps(body_dict)
         headers = self._get_headers("POST", endpoint, body)
-
         try:
             response = requests.post(url, headers=headers, data=body)
             result = response.json()
@@ -146,22 +137,16 @@ class KuCoinClient:
             return None
 
     def get_symbol_price(self, symbol):
-        """
-        支持币名自动补 -USDT，并安全处理所有情况
-        """
-        # 只要不是符号对（没有"-"），且不是主流稳定币，则拼接 -USDT
         if "-" not in symbol and symbol not in ["USDT", "USDC", "USDD", "DAI", "BTC", "ETH"]:
             query_symbol = f"{symbol}-USDT"
         else:
             query_symbol = symbol
-
         url = f"{self.base_url}/api/v1/market/orderbook/level1"
         params = {"symbol": query_symbol}
         try:
             response = requests.get(url, params=params)
             response.raise_for_status()
             data = response.json()
-            # data 应该形如 {'code':..., 'data':{'symbol':..., 'price':...}}
             if data and data.get("data") and data["data"].get("price"):
                 return float(data["data"]["price"])
             else:

@@ -1,6 +1,4 @@
 # ================== main_trader.py ==================
-# 主要入口文件，所有可调参数来自 config.py
-
 import time
 import concurrent.futures
 import threading
@@ -19,6 +17,15 @@ TOP_N = CONFIG.get("TOP_N", 5)
 
 progress_counter = {"done": 0}
 
+def to_symbol_pair(symbol):
+    # 自动把单币名（ELON）补成 ELON-USDT，已经有 - 则直接返回
+    if "-" in symbol:
+        return symbol
+    elif symbol in ["USDT", "USDC", "USDD", "DAI", "BTC", "ETH"]:
+        return symbol
+    else:
+        return symbol + "-USDT"
+
 def fetch_score(symbol, sleep_time=WORKER_SLEEP):
     try:
         time.sleep(sleep_time)
@@ -33,7 +40,7 @@ def fetch_score(symbol, sleep_time=WORKER_SLEEP):
 def get_all_tickers(api):
     url = api.base_url + "/api/v1/market/allTickers"
     try:
-        resp = api.session.get(url) if hasattr(api, "session") else requests.get(url)
+        resp = requests.get(url)
         data = resp.json()
         ticker_map = {}
         for item in data.get("data", {}).get("ticker", []):
@@ -59,28 +66,37 @@ def progress_watcher(total):
     print(f"[进度] 已全部完成：{total}/{total}")
 
 def get_portfolio_stats(positions, price_map):
-    """
-    兼容模拟盘 dict 格式和实盘 float 格式的持仓结构
-    """
     total_value = 0
     total_cost = 0
     details = []
     for symbol, pos in positions.items():
-        # 模拟盘: {symbol: {'amount':..., 'entry_price':...}}
-        # 实盘:   {symbol: float/int}
-        if isinstance(pos, dict):
-            amount = float(pos.get("amount", 0))
-            entry_price = float(pos.get("entry_price", 0))
-        else:
-            amount = float(pos)
-            entry_price = float(price_map.get(symbol, 0))  # 实盘只能用现价当成本
-        price = float(price_map.get(symbol, entry_price))
+        amount = float(pos.get("amount", 0))
+        entry_price = float(pos.get("entry_price", 0))
+        price = float(price_map.get(to_symbol_pair(symbol), entry_price))
         value = amount * price
         cost = amount * entry_price
         total_value += value
         total_cost += cost
         details.append((symbol, amount, entry_price, price, value, cost))
     return total_value, total_cost, details
+
+def normalize_positions(balances, price_map):
+    """
+    将简单dict的 {币:数量} 持仓结构补全为标准格式，所有后续逻辑都能统一用
+    """
+    normalized = {}
+    now = time.strftime('%Y-%m-%d %H:%M:%S')
+    for symbol, amount in balances.items():
+        query_symbol = to_symbol_pair(symbol)
+        entry_price = float(price_map.get(query_symbol, 0))
+        normalized[symbol] = {
+            "amount": float(amount),
+            "entry_price": entry_price,
+            "base_price": entry_price,
+            "max_price": entry_price,
+            "last_update": now
+        }
+    return normalized
 
 def main():
     start_time = time.time()
@@ -89,7 +105,6 @@ def main():
     DRY_RUN = CONFIG.get("DRY_RUN", False)
     SIMULATE = CONFIG.get("SIMULATE", True)
 
-    # --- 根据模式导入账户操作函数 ---
     if SIMULATE:
         from sim_account import (
             sim_get_balance as get_account_balances,
@@ -108,7 +123,6 @@ def main():
     print(f"[主控] 共获取到 {total} 个交易对，开始多线程评分...")
 
     max_workers = CONFIG.get("MAX_WORKERS", DEFAULT_WORKERS)
-
     price_map = get_all_tickers(api)
 
     progress_counter["done"] = 0
@@ -163,34 +177,35 @@ def main():
     print(f"\n[主控] 本轮Top评分币种（已过滤）: {top_symbols}")
 
     balances = get_account_balances()
-    positions = get_positions()
+    positions_raw = get_positions()
+    positions = normalize_positions(positions_raw, price_map)
     print(f"[主控] 当前账户余额: {balances}")
-    print(f"[主控] 当前虚拟持仓: {positions}")
+    print(f"[主控] 当前标准化持仓: {positions}")
 
-    # --- 汇总资产并打印 ---
     total_value, total_cost, details = get_portfolio_stats(positions, price_map)
     print(f"[主控] 持仓总市值：{total_value:.2f} USDT，持仓成本：{total_cost:.2f} USDT，浮盈亏：{total_value-total_cost:.2f} USDT")
     for sym, amt, entry, price, val, cost in details:
         print(f"   - {sym}: 数量{amt:.4f}, 买入{entry}, 现价{price}, 市值{val:.2f}, 盈亏{val-cost:.2f}")
 
-    # --- 定义适配 DRY_RUN 的 place_order ---
+    # 自动补交易对
     if SIMULATE:
         def place_order(side, symbol, amount, price=None, now_time=None):
+            symbol_pair = to_symbol_pair(symbol)
             if DRY_RUN:
-                print(f"[DRY_RUN] Would {side.upper()} {symbol} amount={amount} price={price if price else 'market'}")
-                return {"side": side, "symbol": symbol, "amount": amount, "price": price, "dry_run": True}
+                print(f"[DRY_RUN] Would {side.upper()} {symbol_pair} amount={amount} price={price if price else 'market'}")
+                return {"side": side, "symbol": symbol_pair, "amount": amount, "price": price, "dry_run": True}
             return sim_place_order_raw(
-                side, symbol, amount, price, now_time,
-                market_price=price_map.get(symbol)
+                side, symbol_pair, amount, price, now_time,
+                market_price=price_map.get(symbol_pair)
             )
     else:
         def place_order(side, symbol, amount, price=None, now_time=None):
+            symbol_pair = to_symbol_pair(symbol)
             if DRY_RUN:
-                print(f"[DRY_RUN] Would {side.upper()} {symbol} amount={amount} price={price if price else 'market'}")
-                return {"side": side, "symbol": symbol, "amount": amount, "price": price, "dry_run": True}
-            return place_order_real(symbol, side, amount, price)
+                print(f"[DRY_RUN] Would {side.upper()} {symbol_pair} amount={amount} price={price if price else 'market'}")
+                return {"side": side, "symbol": symbol_pair, "amount": amount, "price": price, "dry_run": True}
+            return place_order_real(symbol_pair, side, amount, price)
 
-    # --- 核心调仓 ---
     rebalance_portfolio(
         top_symbols=top_symbols,
         balances=balances,

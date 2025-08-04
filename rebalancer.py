@@ -17,6 +17,14 @@ TRAILING_STOP_PCT = Decimal(str(CONFIG.get("TRAILING_STOP_PCT", 0.03)))
 MIN_BUY_AMOUNT = Decimal(str(CONFIG.get("MIN_BUY_AMOUNT", 5)))
 DRY_RUN = CONFIG.get("DRY_RUN", False)
 
+def to_symbol_pair(symbol):
+    if "-" in symbol:
+        return symbol
+    elif symbol in ["USDT", "USDC", "USDD", "DAI", "BTC", "ETH"]:
+        return symbol
+    else:
+        return symbol + "-USDT"
+
 def get_price_with_map(symbol, price_map, api_client):
     if price_map and symbol in price_map and price_map[symbol] is not None:
         return Decimal(str(price_map[symbol]))
@@ -41,16 +49,6 @@ def get_entry_price(pos):
     return Decimal("0")
 
 def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None):
-    """
-    智能调仓核心逻辑，支持：
-      - 固定止盈止损
-      - 移动止损和动态基准价刷新
-      - 仓位黑名单与冷却
-      - 日志记录
-      - 低资金自动停止买入
-      - DRY_RUN 支持
-      - 兼容实盘余额/模拟盘仓位结构
-    """
     print("\n🔁 [调仓] 开始执行智能调仓逻辑")
     api = KuCoinClient()
     is_simulate = CONFIG.get("SIMULATE", True)
@@ -58,7 +56,6 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     usdt_total = Decimal(str(CONFIG.get("SIM_START_BALANCE", 100))) if is_simulate else raw_usdt
     usdt_avail = raw_usdt
 
-    # 兼容两种结构: 有amount/entry_price 或 float
     positions = {
         k: v for k, v in positions.items()
         if get_amount(v) > 0
@@ -70,7 +67,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         amount = get_amount(pos)
         entry = get_entry_price(pos)
         cost = entry * amount
-        cur_price = get_price_with_map(symbol, price_map, api)
+        cur_price = get_price_with_map(to_symbol_pair(symbol), price_map, api)
         if not cur_price or cur_price <= 0:
             cur_price = entry
         value = cur_price * amount
@@ -93,11 +90,10 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             print(f"[异常] 解析持仓数据失败 {symbol}: {e}")
             continue
 
-        current_price = get_price_with_map(symbol, price_map, api)
+        current_price = get_price_with_map(to_symbol_pair(symbol), price_map, api)
         if base_price <= 0 or current_price is None or current_price <= 0:
             continue
 
-        # 动态基准价刷新
         if current_price > max_price:
             max_price = current_price
             base_price = max_price
@@ -145,14 +141,18 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             print(f"[DRY_RUN] Would SELL {symbol} amount={get_amount(pos)}")
             result = {"side": "sell", "symbol": symbol, "amount": get_amount(pos), "dry_run": True}
         else:
-            result = place_order("sell", symbol, float(get_amount(pos)), None, now_time=now)
+            result = place_order("sell", to_symbol_pair(symbol), float(get_amount(pos)), None, now_time=now)
         if result:
             print(f"[调仓] ✅ 卖出 {symbol} 成功")
         else:
             print(f"[调仓] ❌ 卖出 {symbol} 失败")
 
-    if not is_simulate:
+    # === 卖出后，强制 sleep 保证资金到账，再拉余额 ===
+    if not is_simulate and not DRY_RUN and sell_list:
+        time.sleep(2)  # 可根据实际网络调整 2~3 秒
+        balances = api.get_account_holdings()
         usdt_avail = Decimal(str(balances.get("USDT", 0)))
+
     print("\n[调仓] 卖出后账户快照：")
     print(f"  - 可用USDT: {usdt_avail:.2f}")
     for symbol in sell_list:
@@ -160,7 +160,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
 
     hold_total_value = Decimal("0")
     for symbol, pos in positions.items():
-        cur_price = get_price_with_map(symbol, price_map, api)
+        cur_price = get_price_with_map(to_symbol_pair(symbol), price_map, api)
         if not cur_price or cur_price <= 0:
             cur_price = get_entry_price(pos)
         hold_total_value += cur_price * get_amount(pos)
@@ -190,11 +190,10 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             print(f"[调仓] ⚠️ 资金不足跳过 {symbol}")
             continue
 
-        cur_price = get_price_with_map(symbol, price_map, api)
+        cur_price = get_price_with_map(to_symbol_pair(symbol), price_map, api)
         if DRY_RUN:
             print(f"[DRY_RUN] Would BUY {symbol} amount={float(buy_amount)}")
             result = {"side": "buy", "symbol": symbol, "amount": float(buy_amount), "dry_run": True}
-            # 构造模拟持仓结构
             positions[symbol] = {
                 "amount": float(buy_amount / (cur_price or Decimal("1"))),
                 "entry_price": float(cur_price or 0),
@@ -203,7 +202,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
                 "max_price": str(cur_price or 0)
             }
         else:
-            result = place_order("buy", symbol, float(buy_amount), None, now_time=now)
+            result = place_order("buy", to_symbol_pair(symbol), float(buy_amount), None, now_time=now)
             if result and cur_price:
                 positions[symbol] = {
                     "amount": float(buy_amount / (cur_price or Decimal("1"))),
