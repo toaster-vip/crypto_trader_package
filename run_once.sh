@@ -56,6 +56,7 @@ cd "$PROJECT_DIR" || {
 }
 
 # ========== 拉取最新 Git 代码，动态切换分支 ==========
+TARGET_BRANCH="${1:-main}"  # 支持传参，也可直接修改这里默认分支
 log "🔄 尝试切换并拉取 Git 分支 $TARGET_BRANCH ..."
 git fetch origin
 git checkout $TARGET_BRANCH || {

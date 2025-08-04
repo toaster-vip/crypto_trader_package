@@ -11,11 +11,10 @@ _symbol_buy_cooldown = {}
 TAKE_PROFIT = Decimal(str(TRADE["TAKE_PROFIT"]))
 STOP_LOSS = Decimal(str(TRADE["STOP_LOSS"]))
 MAX_ALLOC_PER_SYMBOL = Decimal(str(CONFIG.get("MAX_POSITION_RATIO", 0.10)))
-COOLDOWN_AFTER_LOSS = 3
-USDT_STEP = Decimal("0.01")
-
-# 移动止损比例
-TRAILING_STOP_PCT = Decimal("0.03")
+COOLDOWN_AFTER_LOSS = int(CONFIG.get("COOLDOWN_AFTER_LOSS", 3))
+USDT_STEP = Decimal(str(CONFIG.get("USDT_STEP", 0.01)))
+TRAILING_STOP_PCT = Decimal(str(CONFIG.get("TRAILING_STOP_PCT", 0.03)))
+MIN_BUY_AMOUNT = Decimal(str(CONFIG.get("MIN_BUY_AMOUNT", 5)))
 
 def get_price_with_map(symbol, price_map, api_client):
     if price_map and symbol in price_map and price_map[symbol] is not None:
@@ -53,7 +52,9 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         amount = Decimal(str(pos.get("amount", 0)))
         cost = entry * amount
         cur_price = get_price_with_map(symbol, price_map, api)
-        value = (cur_price or Decimal("0")) * amount
+        if not cur_price or cur_price <= 0:
+            cur_price = entry
+        value = cur_price * amount
         pnl_pct = ((value - cost) / cost * 100) if cost > 0 else Decimal("0")
         print(f" - {symbol:>12}: 持仓 {amount:.4f}，买入成本 {cost:.2f}，现价市值 {value:.2f}，盈亏 {pnl_pct:.2f}%")
         hold_total_cost += cost
@@ -84,7 +85,6 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             pos["base_price"] = str(base_price)
             pos["max_price"] = str(max_price)
 
-        # 收益率按最新base_price计算
         pnl_pct = (current_price - base_price) / base_price
         trailing_stop_price = max_price * (Decimal("1") - TRAILING_STOP_PCT)
         reason = ""
@@ -135,14 +135,17 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     print(f"  - 可用USDT: {usdt_avail:.2f}")
     for symbol in sell_list:
         positions.pop(symbol, None)
+
+    # 统计最新持仓市值（用现价，兜底 entry_price）
     hold_total_value = Decimal("0")
     for symbol, pos in positions.items():
         cur_price = get_price_with_map(symbol, price_map, api)
-        if cur_price:
-            hold_total_value += cur_price * Decimal(str(pos.get("amount", 0)))
+        if not cur_price or cur_price <= 0:
+            cur_price = Decimal(str(pos.get("entry_price", 0)))
+        hold_total_value += cur_price * Decimal(str(pos.get("amount", 0)))
     print(f"  - 持仓币种市值合计: {hold_total_value:.2f}\n")
 
-    if usdt_avail <= 1:
+    if usdt_avail <= MIN_BUY_AMOUNT:
         print(f"[调仓] 💰 USDT 余额不足（{usdt_avail}），停止买入")
         return
 
@@ -162,7 +165,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             continue
 
         buy_amount = min(usdt_avail, max_alloc).quantize(USDT_STEP, rounding=ROUND_DOWN)
-        if buy_amount < Decimal("5"):
+        if buy_amount < MIN_BUY_AMOUNT:
             print(f"[调仓] ⚠️ 资金不足跳过 {symbol}")
             continue
 
@@ -172,14 +175,14 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             usdt_avail -= buy_amount
             buy_count += 1
             cur_price = get_price_with_map(symbol, price_map, api)
-            if cur_price:
-                hold_total_value += cur_price * buy_amount
-
-            # 初始化动态基准价和最高价
-            pos = positions.get(symbol, {})
-            pos["base_price"] = str(cur_price)
-            pos["max_price"] = str(cur_price)
-            positions[symbol] = pos
+            # 持仓同步到内存，确保后续市值统计准确
+            positions[symbol] = {
+                "amount": float(buy_amount / (cur_price or Decimal("1"))),  # 买入实际数量
+                "entry_price": float(cur_price or 0),
+                "last_update": now,
+                "base_price": str(cur_price or 0),
+                "max_price": str(cur_price or 0)
+            }
 
             log_trade({
                 "timestamp": now,
@@ -192,7 +195,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         else:
             print(f"[调仓] ❌ 买入 {symbol} 失败")
 
-        if usdt_avail < Decimal("5"):
+        if usdt_avail < MIN_BUY_AMOUNT:
             print(f"[调仓] 💸 余额耗尽，结束买入")
             break
 
@@ -200,6 +203,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     print(f"  - 可用USDT: {usdt_avail:.2f}")
     print(f"  - 持仓币种市值合计: {hold_total_value:.2f}\n")
 
+    # 冷却期管理
     for s in list(_symbol_buy_cooldown.keys()):
         _symbol_buy_cooldown[s] -= 1
         if _symbol_buy_cooldown[s] <= 0:
@@ -222,11 +226,7 @@ def get_blacklist():
 def is_symbol_in_cooldown(symbol):
     return _symbol_buy_cooldown.get(symbol, 0) > 0
 
-
-# ========= 补充说明和风险点 =========
-"""
-1. 本策略将已持有币如创新高则'刷新基准价'，不断“锁定”浮盈，这有助于防范回撤。
-2. 动态调整买入价和最大价时，可能导致频繁止损（尤其震荡行情），加大交易费用和滑点。
-3. 如需降低频繁止损风险，可设定最小回撤幅度或等待连续创新高才刷新基准价；或结合固定止损/移动止损双重判定。
-4. 日志建议每次决策后分析盈亏结构和频繁卖出原因，定期复盘优化触发条件。
-"""
+# ========= 策略风控风险点说明 =========
+# 1. 已持有币如创新高即刷新基准价，可锁定盈利但震荡市下或频繁刷新可能引发“止盈变止损”，需结合移动止损和固定止损双保险。
+# 2. 建议日志每轮定期分析频繁止损与盈亏分布，调整触发阈值参数，避免高频交易带来成本和滑点风险。
+# 3. 可考虑设“最小基准涨幅”或“连续创新高”后才刷新base_price等策略优化，进一步抑制追高卖低。

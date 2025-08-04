@@ -1,3 +1,6 @@
+# ================== main_trader.py ==================
+# 主要入口文件，所有可调参数来自 config.py
+
 import time
 import concurrent.futures
 import threading
@@ -6,22 +9,23 @@ from strategy import get_symbol_score
 from notifier import send_serverchan_notification
 from kucoin_api import KuCoinClient
 from rebalancer import rebalance_portfolio, get_blacklist, is_symbol_in_cooldown
-from trade_logger import log_round_snapshot   # 日志模块
 import requests
 
-DEFAULT_WORKERS = 10
-MIN_TURNOVER_1H = CONFIG.get("MIN_TURNOVER_1H", 5000)
-MAX_NEWCOIN_DAYS = 7
+DEFAULT_WORKERS = CONFIG.get("DEFAULT_WORKERS", 10)
+MIN_TURNOVER_1H = CONFIG.get("MIN_TURNOVER_1H")
+MAX_NEWCOIN_DAYS = CONFIG.get("MAX_NEWCOIN_DAYS", 7)
+WORKER_SLEEP = CONFIG.get("WORKER_SLEEP", 0.18)
+TOP_N = CONFIG.get("TOP_N", 5)
+
 progress_counter = {"done": 0}
 
-def fetch_score(symbol, sleep_time=0.18):
+def fetch_score(symbol, sleep_time=WORKER_SLEEP):
     try:
         time.sleep(sleep_time)
         score_data = get_symbol_score(symbol)
         return symbol, score_data
     except Exception as e:
         print(f"[WARN] 获取 {symbol} 评分失败: {e}")
-        # 默认值全补
         return symbol, {"score": -999, "turnover": 0, "is_new_coin": True, "is_extreme": False}
     finally:
         progress_counter["done"] += 1
@@ -91,7 +95,6 @@ def main():
     print(f"[主控] 共获取到 {total} 个交易对，开始多线程评分...")
 
     max_workers = CONFIG.get("MAX_WORKERS", DEFAULT_WORKERS)
-    sleep_time = CONFIG.get("WORKER_SLEEP", 0.18)
 
     price_map = get_all_tickers(api)
 
@@ -101,10 +104,11 @@ def main():
     progress_thread.start()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        results = list(executor.map(lambda sym: fetch_score(sym, sleep_time), all_symbols))
+        results = list(executor.map(lambda sym: fetch_score(sym, WORKER_SLEEP), all_symbols))
 
     progress_thread.join()
 
+    # 各类过滤
     filtered_scores = {}
     turnover_filtered = 0
     blacklist_filtered = 0
@@ -142,8 +146,7 @@ def main():
         print("[主控] ⚠️ 没有可用的币种（全部被过滤）。")
         return
 
-    top_n = CONFIG.get("TOP_N", 5)
-    top_symbols = sorted(filtered_scores, key=filtered_scores.get, reverse=True)[:top_n]
+    top_symbols = sorted(filtered_scores, key=filtered_scores.get, reverse=True)[:TOP_N]
     print(f"\n[主控] 本轮Top评分币种（已过滤）: {top_symbols}")
 
     balances = get_account_balances()
@@ -157,29 +160,7 @@ def main():
     for sym, amt, entry, price, val, cost in details:
         print(f"   - {sym}: 数量{amt:.4f}, 买入{entry}, 现价{price}, 市值{val:.2f}, 盈亏{val-cost:.2f}")
 
-    # 日志落盘：本轮快照
-    log_round_snapshot({
-        "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
-        "account": balances,
-        "positions": positions,
-        "top_symbols": top_symbols,
-        "filter_count": {
-            "turnover": turnover_filtered,
-            "blacklist": blacklist_filtered,
-            "cooldown": cooldown_filtered,
-            "newcoin": newcoin_filtered,
-            "extreme": extreme_filtered,
-        },
-        "params": {
-            "TAKE_PROFIT": CONFIG.get("TAKE_PROFIT"),
-            "STOP_LOSS": CONFIG.get("STOP_LOSS"),
-            "MAX_POSITION_RATIO": CONFIG.get("MAX_POSITION_RATIO"),
-            "MIN_TURNOVER_1H": MIN_TURNOVER_1H,
-            "TOP_N": top_n
-        }
-    })
-
-    # ------ 关键：模拟盘下单始终用市价 --------
+    # 模拟盘下单用市价
     if CONFIG.get("SIMULATE"):
         def place_order(side, symbol, amount, price=None, now_time=None):
             return sim_place_order_raw(
