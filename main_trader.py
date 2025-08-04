@@ -17,6 +17,15 @@ TOP_N = CONFIG.get("TOP_N", 5)
 
 progress_counter = {"done": 0}
 
+def to_symbol_pair(symbol):
+    # 自动把单币名（ELON）补成 ELON-USDT，已经有 - 则直接返回
+    if "-" in symbol:
+        return symbol
+    elif symbol in ["USDT", "USDC", "USDD", "DAI", "BTC", "ETH"]:
+        return symbol
+    else:
+        return symbol + "-USDT"
+
 def fetch_score(symbol, sleep_time=WORKER_SLEEP):
     try:
         time.sleep(sleep_time)
@@ -63,7 +72,7 @@ def get_portfolio_stats(positions, price_map):
     for symbol, pos in positions.items():
         amount = float(pos.get("amount", 0))
         entry_price = float(pos.get("entry_price", 0))
-        price = float(price_map.get(symbol, entry_price))
+        price = float(price_map.get(to_symbol_pair(symbol), entry_price))
         value = amount * price
         cost = amount * entry_price
         total_value += value
@@ -78,13 +87,7 @@ def normalize_positions(balances, price_map):
     normalized = {}
     now = time.strftime('%Y-%m-%d %H:%M:%S')
     for symbol, amount in balances.items():
-        # 补币名
-        if "-" in symbol:
-            query_symbol = symbol
-        elif symbol not in ["USDT", "USDC", "USDD", "DAI", "BTC", "ETH"]:
-            query_symbol = symbol + "-USDT"
-        else:
-            query_symbol = symbol
+        query_symbol = to_symbol_pair(symbol)
         entry_price = float(price_map.get(query_symbol, 0))
         normalized[symbol] = {
             "amount": float(amount),
@@ -175,7 +178,6 @@ def main():
 
     balances = get_account_balances()
     positions_raw = get_positions()
-    # 统一处理为标准结构
     positions = normalize_positions(positions_raw, price_map)
     print(f"[主控] 当前账户余额: {balances}")
     print(f"[主控] 当前标准化持仓: {positions}")
@@ -185,21 +187,24 @@ def main():
     for sym, amt, entry, price, val, cost in details:
         print(f"   - {sym}: 数量{amt:.4f}, 买入{entry}, 现价{price}, 市值{val:.2f}, 盈亏{val-cost:.2f}")
 
+    # 自动补交易对
     if SIMULATE:
         def place_order(side, symbol, amount, price=None, now_time=None):
+            symbol_pair = to_symbol_pair(symbol)
             if DRY_RUN:
-                print(f"[DRY_RUN] Would {side.upper()} {symbol} amount={amount} price={price if price else 'market'}")
-                return {"side": side, "symbol": symbol, "amount": amount, "price": price, "dry_run": True}
+                print(f"[DRY_RUN] Would {side.upper()} {symbol_pair} amount={amount} price={price if price else 'market'}")
+                return {"side": side, "symbol": symbol_pair, "amount": amount, "price": price, "dry_run": True}
             return sim_place_order_raw(
-                side, symbol, amount, price, now_time,
-                market_price=price_map.get(symbol)
+                side, symbol_pair, amount, price, now_time,
+                market_price=price_map.get(symbol_pair)
             )
     else:
         def place_order(side, symbol, amount, price=None, now_time=None):
+            symbol_pair = to_symbol_pair(symbol)
             if DRY_RUN:
-                print(f"[DRY_RUN] Would {side.upper()} {symbol} amount={amount} price={price if price else 'market'}")
-                return {"side": side, "symbol": symbol, "amount": amount, "price": price, "dry_run": True}
-            return place_order_real(symbol, side, amount, price)
+                print(f"[DRY_RUN] Would {side.upper()} {symbol_pair} amount={amount} price={price if price else 'market'}")
+                return {"side": side, "symbol": symbol_pair, "amount": amount, "price": price, "dry_run": True}
+            return place_order_real(symbol_pair, side, amount, price)
 
     rebalance_portfolio(
         top_symbols=top_symbols,
