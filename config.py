@@ -10,8 +10,8 @@ CONFIG = {
     # ==== 日志和运行参数 ====
     "LOG_DIR": "trade_logs",
     "SIM_START_BALANCE": 100,           # 模拟盘初始资金
-    "SIMULATE": True,                   # 是否使用模拟盘
-    "GIT_BRANCH": "update",             # 默认Git分支
+    "SIMULATE": False,                  # False=实盘，True=模拟盘
+    "GIT_BRANCH": "main",               # 默认Git分支
 
     # ==== 资金分配与风控 ====
     "MAX_POSITION_RATIO": 0.10,         # 每币最大仓位比例
@@ -50,6 +50,7 @@ CONFIG = {
 
     # ==== 模拟滑点 ====
     "SIM_SLIPPAGE_PCT": 0.0003,         # 默认滑点0.03%
+    "DRY_RUN": True                     # True=只演练, False=真下单
 }
 
 # --- 兼容旧代码 ---

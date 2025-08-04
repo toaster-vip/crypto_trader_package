@@ -69,12 +69,14 @@ class KuCoinClient:
             data = response.json()
             balances = {}
             for acc in data.get("data", []):
-                if acc.get("type") != "main":
-                    continue
                 currency = acc["currency"]
-                balance = float(acc.get("available") or acc.get("balance") or 0)
+                acc_type = acc.get("type", "")
+                available = acc.get("available") or acc.get("balance") or 0
+                balance = float(available)
+                # 打印所有账户类型和余额，便于调试
+                print(f"[DEBUG] type={acc_type}, currency={currency}, available={available}")
                 if balance > 0:
-                    balances[currency] = balance
+                    balances[currency] = balances.get(currency, 0) + balance
             return balances
         except Exception as e:
             print(f"[ERROR] 获取账户持仓失败: {e}")
@@ -101,6 +103,13 @@ class KuCoinClient:
             return {}
 
     def place_order(self, symbol, side, size, price=None):
+        """
+        支持 DRY_RUN，config.py 只要 DRY_RUN=True，则只演练不会真的下单
+        """
+        if CONFIG.get("DRY_RUN", False):
+            print(f"[DRY_RUN] Would {side.upper()} {symbol} size={size} price={price if price else 'market'}")
+            return {"side": side, "symbol": symbol, "size": size, "price": price, "dry_run": True}
+
         endpoint = "/api/v1/orders"
         url = self.base_url + endpoint
         order_type = "market" if price is None else "limit"
@@ -137,13 +146,27 @@ class KuCoinClient:
             return None
 
     def get_symbol_price(self, symbol):
+        """
+        支持币名自动补 -USDT，并安全处理所有情况
+        """
+        # 只要不是符号对（没有"-"），且不是主流稳定币，则拼接 -USDT
+        if "-" not in symbol and symbol not in ["USDT", "USDC", "USDD", "DAI", "BTC", "ETH"]:
+            query_symbol = f"{symbol}-USDT"
+        else:
+            query_symbol = symbol
+
         url = f"{self.base_url}/api/v1/market/orderbook/level1"
-        params = {"symbol": symbol}
+        params = {"symbol": query_symbol}
         try:
             response = requests.get(url, params=params)
             response.raise_for_status()
             data = response.json()
-            return float(data["data"]["price"])
+            # data 应该形如 {'code':..., 'data':{'symbol':..., 'price':...}}
+            if data and data.get("data") and data["data"].get("price"):
+                return float(data["data"]["price"])
+            else:
+                print(f"[WARN] 无法获取 {query_symbol} 最新价，API返回：{data}")
+                return None
         except Exception as e:
             print(f"[ERROR] 获取价格失败 {symbol}: {e}")
             return None
