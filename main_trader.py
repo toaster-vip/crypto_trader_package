@@ -59,12 +59,21 @@ def progress_watcher(total):
     print(f"[进度] 已全部完成：{total}/{total}")
 
 def get_portfolio_stats(positions, price_map):
+    """
+    兼容模拟盘 dict 格式和实盘 float 格式的持仓结构
+    """
     total_value = 0
     total_cost = 0
     details = []
     for symbol, pos in positions.items():
-        amount = float(pos.get("amount", 0))
-        entry_price = float(pos.get("entry_price", 0))
+        # 模拟盘: {symbol: {'amount':..., 'entry_price':...}}
+        # 实盘:   {symbol: float/int}
+        if isinstance(pos, dict):
+            amount = float(pos.get("amount", 0))
+            entry_price = float(pos.get("entry_price", 0))
+        else:
+            amount = float(pos)
+            entry_price = float(price_map.get(symbol, 0))  # 实盘只能用现价当成本
         price = float(price_map.get(symbol, entry_price))
         value = amount * price
         cost = amount * entry_price
@@ -91,7 +100,7 @@ def main():
     else:
         print("[系统] 运行于【真实KuCoin账户】模式。")
         get_account_balances = api.get_account_holdings
-        get_positions = api.get_account_holdings  # 或实盘持仓查询
+        get_positions = api.get_account_holdings
         place_order_real = api.place_order
 
     all_symbols = api.get_supported_symbols()
