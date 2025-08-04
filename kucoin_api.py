@@ -69,12 +69,14 @@ class KuCoinClient:
             data = response.json()
             balances = {}
             for acc in data.get("data", []):
-                if acc.get("type") != "main":
-                    continue
                 currency = acc["currency"]
-                balance = float(acc.get("available") or acc.get("balance") or 0)
+                acc_type = acc.get("type", "")
+                available = acc.get("available") or acc.get("balance") or 0
+                balance = float(available)
+                # 打印所有账户类型和余额，便于调试
+                print(f"[DEBUG] type={acc_type}, currency={currency}, available={available}")
                 if balance > 0:
-                    balances[currency] = balance
+                    balances[currency] = balances.get(currency, 0) + balance
             return balances
         except Exception as e:
             print(f"[ERROR] 获取账户持仓失败: {e}")
