@@ -1,6 +1,4 @@
 # ================== main_trader.py ==================
-# 主要入口文件，所有可调参数来自 config.py
-
 import time
 import concurrent.futures
 import threading
@@ -33,7 +31,7 @@ def fetch_score(symbol, sleep_time=WORKER_SLEEP):
 def get_all_tickers(api):
     url = api.base_url + "/api/v1/market/allTickers"
     try:
-        resp = api.session.get(url) if hasattr(api, "session") else requests.get(url)
+        resp = requests.get(url)
         data = resp.json()
         ticker_map = {}
         for item in data.get("data", {}).get("ticker", []):
@@ -59,21 +57,12 @@ def progress_watcher(total):
     print(f"[进度] 已全部完成：{total}/{total}")
 
 def get_portfolio_stats(positions, price_map):
-    """
-    兼容模拟盘 dict 格式和实盘 float 格式的持仓结构
-    """
     total_value = 0
     total_cost = 0
     details = []
     for symbol, pos in positions.items():
-        # 模拟盘: {symbol: {'amount':..., 'entry_price':...}}
-        # 实盘:   {symbol: float/int}
-        if isinstance(pos, dict):
-            amount = float(pos.get("amount", 0))
-            entry_price = float(pos.get("entry_price", 0))
-        else:
-            amount = float(pos)
-            entry_price = float(price_map.get(symbol, 0))  # 实盘只能用现价当成本
+        amount = float(pos.get("amount", 0))
+        entry_price = float(pos.get("entry_price", 0))
         price = float(price_map.get(symbol, entry_price))
         value = amount * price
         cost = amount * entry_price
@@ -82,6 +71,30 @@ def get_portfolio_stats(positions, price_map):
         details.append((symbol, amount, entry_price, price, value, cost))
     return total_value, total_cost, details
 
+def normalize_positions(balances, price_map):
+    """
+    将简单dict的 {币:数量} 持仓结构补全为标准格式，所有后续逻辑都能统一用
+    """
+    normalized = {}
+    now = time.strftime('%Y-%m-%d %H:%M:%S')
+    for symbol, amount in balances.items():
+        # 补币名
+        if "-" in symbol:
+            query_symbol = symbol
+        elif symbol not in ["USDT", "USDC", "USDD", "DAI", "BTC", "ETH"]:
+            query_symbol = symbol + "-USDT"
+        else:
+            query_symbol = symbol
+        entry_price = float(price_map.get(query_symbol, 0))
+        normalized[symbol] = {
+            "amount": float(amount),
+            "entry_price": entry_price,
+            "base_price": entry_price,
+            "max_price": entry_price,
+            "last_update": now
+        }
+    return normalized
+
 def main():
     start_time = time.time()
     api = KuCoinClient()
@@ -89,7 +102,6 @@ def main():
     DRY_RUN = CONFIG.get("DRY_RUN", False)
     SIMULATE = CONFIG.get("SIMULATE", True)
 
-    # --- 根据模式导入账户操作函数 ---
     if SIMULATE:
         from sim_account import (
             sim_get_balance as get_account_balances,
@@ -108,7 +120,6 @@ def main():
     print(f"[主控] 共获取到 {total} 个交易对，开始多线程评分...")
 
     max_workers = CONFIG.get("MAX_WORKERS", DEFAULT_WORKERS)
-
     price_map = get_all_tickers(api)
 
     progress_counter["done"] = 0
@@ -163,17 +174,17 @@ def main():
     print(f"\n[主控] 本轮Top评分币种（已过滤）: {top_symbols}")
 
     balances = get_account_balances()
-    positions = get_positions()
+    positions_raw = get_positions()
+    # 统一处理为标准结构
+    positions = normalize_positions(positions_raw, price_map)
     print(f"[主控] 当前账户余额: {balances}")
-    print(f"[主控] 当前虚拟持仓: {positions}")
+    print(f"[主控] 当前标准化持仓: {positions}")
 
-    # --- 汇总资产并打印 ---
     total_value, total_cost, details = get_portfolio_stats(positions, price_map)
     print(f"[主控] 持仓总市值：{total_value:.2f} USDT，持仓成本：{total_cost:.2f} USDT，浮盈亏：{total_value-total_cost:.2f} USDT")
     for sym, amt, entry, price, val, cost in details:
         print(f"   - {sym}: 数量{amt:.4f}, 买入{entry}, 现价{price}, 市值{val:.2f}, 盈亏{val-cost:.2f}")
 
-    # --- 定义适配 DRY_RUN 的 place_order ---
     if SIMULATE:
         def place_order(side, symbol, amount, price=None, now_time=None):
             if DRY_RUN:
@@ -190,7 +201,6 @@ def main():
                 return {"side": side, "symbol": symbol, "amount": amount, "price": price, "dry_run": True}
             return place_order_real(symbol, side, amount, price)
 
-    # --- 核心调仓 ---
     rebalance_portfolio(
         top_symbols=top_symbols,
         balances=balances,
