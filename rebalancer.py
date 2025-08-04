@@ -1,7 +1,6 @@
 import time
 from decimal import Decimal, ROUND_DOWN
 from config import CONFIG, TRADE
-
 from notifier import send_serverchan_notification
 from kucoin_api import KuCoinClient
 from trade_logger import log_trade, log_rebalance
@@ -29,6 +28,18 @@ def get_price_with_map(symbol, price_map, api_client):
         print(f"[错误] 获取{symbol}实时价格失败：{e}")
     return None
 
+def get_amount(pos):
+    if isinstance(pos, dict):
+        return Decimal(str(pos.get("amount", 0)))
+    elif isinstance(pos, (int, float, Decimal)):
+        return Decimal(str(pos))
+    return Decimal("0")
+
+def get_entry_price(pos):
+    if isinstance(pos, dict):
+        return Decimal(str(pos.get("entry_price", 0)))
+    return Decimal("0")
+
 def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None):
     """
     智能调仓核心逻辑，支持：
@@ -38,6 +49,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
       - 日志记录
       - 低资金自动停止买入
       - DRY_RUN 支持
+      - 兼容实盘余额/模拟盘仓位结构
     """
     print("\n🔁 [调仓] 开始执行智能调仓逻辑")
     api = KuCoinClient()
@@ -46,12 +58,17 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     usdt_total = Decimal(str(CONFIG.get("SIM_START_BALANCE", 100))) if is_simulate else raw_usdt
     usdt_avail = raw_usdt
 
-    positions = {k: v for k, v in positions.items() if Decimal(str(v.get("amount", 0))) > 0}
+    # 兼容两种结构: 有amount/entry_price 或 float
+    positions = {
+        k: v for k, v in positions.items()
+        if get_amount(v) > 0
+    }
+
     print("🪙 当前持仓市值与成本：")
     hold_total_cost, hold_total_value = Decimal("0"), Decimal("0")
     for symbol, pos in positions.items():
-        entry = Decimal(str(pos.get("entry_price", 0)))
-        amount = Decimal(str(pos.get("amount", 0)))
+        amount = get_amount(pos)
+        entry = get_entry_price(pos)
         cost = entry * amount
         cur_price = get_price_with_map(symbol, price_map, api)
         if not cur_price or cur_price <= 0:
@@ -69,9 +86,9 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     # === 卖出逻辑 ===
     for symbol, pos in positions.items():
         try:
-            amount = Decimal(str(pos.get("amount", 0)))
-            base_price = Decimal(str(pos.get("base_price", pos.get("entry_price", "0"))))
-            max_price = Decimal(str(pos.get("max_price", base_price)))
+            amount = get_amount(pos)
+            base_price = Decimal(str(pos.get("base_price", pos.get("entry_price", "0")))) if isinstance(pos, dict) else get_entry_price(pos)
+            max_price = Decimal(str(pos.get("max_price", base_price))) if isinstance(pos, dict) else base_price
         except Exception as e:
             print(f"[异常] 解析持仓数据失败 {symbol}: {e}")
             continue
@@ -80,11 +97,13 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         if base_price <= 0 or current_price is None or current_price <= 0:
             continue
 
+        # 动态基准价刷新
         if current_price > max_price:
             max_price = current_price
             base_price = max_price
-            pos["base_price"] = str(base_price)
-            pos["max_price"] = str(max_price)
+            if isinstance(pos, dict):
+                pos["base_price"] = str(base_price)
+                pos["max_price"] = str(max_price)
 
         pnl_pct = (current_price - base_price) / base_price
         trailing_stop_price = max_price * (Decimal("1") - TRAILING_STOP_PCT)
@@ -123,10 +142,10 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         if not pos:
             continue
         if DRY_RUN:
-            print(f"[DRY_RUN] Would SELL {symbol} amount={pos['amount']}")
-            result = {"side": "sell", "symbol": symbol, "amount": pos["amount"], "dry_run": True}
+            print(f"[DRY_RUN] Would SELL {symbol} amount={get_amount(pos)}")
+            result = {"side": "sell", "symbol": symbol, "amount": get_amount(pos), "dry_run": True}
         else:
-            result = place_order("sell", symbol, pos["amount"], None, now_time=now)
+            result = place_order("sell", symbol, float(get_amount(pos)), None, now_time=now)
         if result:
             print(f"[调仓] ✅ 卖出 {symbol} 成功")
         else:
@@ -143,8 +162,8 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     for symbol, pos in positions.items():
         cur_price = get_price_with_map(symbol, price_map, api)
         if not cur_price or cur_price <= 0:
-            cur_price = Decimal(str(pos.get("entry_price", 0)))
-        hold_total_value += cur_price * Decimal(str(pos.get("amount", 0)))
+            cur_price = get_entry_price(pos)
+        hold_total_value += cur_price * get_amount(pos)
     print(f"  - 持仓币种市值合计: {hold_total_value:.2f}\n")
 
     if usdt_avail <= MIN_BUY_AMOUNT:
@@ -171,10 +190,11 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             print(f"[调仓] ⚠️ 资金不足跳过 {symbol}")
             continue
 
+        cur_price = get_price_with_map(symbol, price_map, api)
         if DRY_RUN:
             print(f"[DRY_RUN] Would BUY {symbol} amount={float(buy_amount)}")
             result = {"side": "buy", "symbol": symbol, "amount": float(buy_amount), "dry_run": True}
-            cur_price = get_price_with_map(symbol, price_map, api)
+            # 构造模拟持仓结构
             positions[symbol] = {
                 "amount": float(buy_amount / (cur_price or Decimal("1"))),
                 "entry_price": float(cur_price or 0),
@@ -184,7 +204,6 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             }
         else:
             result = place_order("buy", symbol, float(buy_amount), None, now_time=now)
-            cur_price = get_price_with_map(symbol, price_map, api)
             if result and cur_price:
                 positions[symbol] = {
                     "amount": float(buy_amount / (cur_price or Decimal("1"))),
@@ -240,8 +259,3 @@ def get_blacklist():
 
 def is_symbol_in_cooldown(symbol):
     return _symbol_buy_cooldown.get(symbol, 0) > 0
-
-# ========== 策略风控风险点说明 ==========
-# 1. 已持有币如创新高即刷新基准价，可锁定盈利但震荡市下或频繁刷新可能引发“止盈变止损”，需结合移动止损和固定止损双保险。
-# 2. 建议日志每轮定期分析频繁止损与盈亏分布，调整触发阈值参数，避免高频交易带来成本和滑点风险。
-# 3. 可考虑设“最小基准涨幅”或“连续创新高”后才刷新base_price等策略优化，进一步抑制追高卖低。
