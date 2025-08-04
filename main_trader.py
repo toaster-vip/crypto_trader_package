@@ -77,7 +77,11 @@ def main():
     start_time = time.time()
     api = KuCoinClient()
 
-    if CONFIG.get("SIMULATE"):
+    DRY_RUN = CONFIG.get("DRY_RUN", False)
+    SIMULATE = CONFIG.get("SIMULATE", True)
+
+    # --- 根据模式导入账户操作函数 ---
+    if SIMULATE:
         from sim_account import (
             sim_get_balance as get_account_balances,
             sim_get_positions as get_positions,
@@ -87,8 +91,8 @@ def main():
     else:
         print("[系统] 运行于【真实KuCoin账户】模式。")
         get_account_balances = api.get_account_holdings
-        get_positions = api.get_account_holdings
-        place_order = api.place_order
+        get_positions = api.get_account_holdings  # 或实盘持仓查询
+        place_order_real = api.place_order
 
     all_symbols = api.get_supported_symbols()
     total = len(all_symbols)
@@ -160,14 +164,24 @@ def main():
     for sym, amt, entry, price, val, cost in details:
         print(f"   - {sym}: 数量{amt:.4f}, 买入{entry}, 现价{price}, 市值{val:.2f}, 盈亏{val-cost:.2f}")
 
-    # 模拟盘下单用市价
-    if CONFIG.get("SIMULATE"):
+    # --- 定义适配 DRY_RUN 的 place_order ---
+    if SIMULATE:
         def place_order(side, symbol, amount, price=None, now_time=None):
+            if DRY_RUN:
+                print(f"[DRY_RUN] Would {side.upper()} {symbol} amount={amount} price={price if price else 'market'}")
+                return {"side": side, "symbol": symbol, "amount": amount, "price": price, "dry_run": True}
             return sim_place_order_raw(
                 side, symbol, amount, price, now_time,
                 market_price=price_map.get(symbol)
             )
+    else:
+        def place_order(side, symbol, amount, price=None, now_time=None):
+            if DRY_RUN:
+                print(f"[DRY_RUN] Would {side.upper()} {symbol} amount={amount} price={price if price else 'market'}")
+                return {"side": side, "symbol": symbol, "amount": amount, "price": price, "dry_run": True}
+            return place_order_real(symbol, side, amount, price)
 
+    # --- 核心调仓 ---
     rebalance_portfolio(
         top_symbols=top_symbols,
         balances=balances,
