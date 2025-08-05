@@ -4,7 +4,6 @@ import hmac
 import base64
 import hashlib
 import json
-import os
 from config import CONFIG
 from log_utils import log_error, log_debug, log_info
 
@@ -28,14 +27,13 @@ class KuCoinClient:
         self.api_secret = CONFIG["KUCOIN_API_SECRET"]
         self.passphrase = CONFIG["KUCOIN_API_PASSPHRASE"]
         self.base_url = "https://api.kucoin.com"
-        self.simulate = CONFIG.get("DRY_RUN", False)
+        self.simulate = CONFIG.get("DRY_RUN", False) or CONFIG.get("SIMULATE", False)
         self.symbol_limits_cache = {}
         self._init_symbol_limits_cache()
         if self.api_key:
             print("🔑 [KuCoinClient] 使用 KuCoin API KEY:", self.api_key[:5] + "***")
         print("📁 [KuCoinClient] config.py 加载成功")
 
-    ### 签名 headers
     def _get_headers(self, method, endpoint, body=""):
         now = str(int(time.time() * 1000))
         str_to_sign = now + method.upper() + endpoint + body
@@ -54,7 +52,6 @@ class KuCoinClient:
             "Content-Type": "application/json"
         }
 
-    ### 缓存交易对规则
     def _init_symbol_limits_cache(self):
         print("[INFO] ⏳ 正在加载所有交易对限制信息...")
         try:
@@ -79,7 +76,6 @@ class KuCoinClient:
     def get_symbol_limits(self, symbol):
         return self.symbol_limits_cache.get(to_symbol_pair(symbol), None)
 
-    ### 行情榜，所有 ticker
     def get_all_tickers(self):
         url = self.base_url + "/api/v1/market/allTickers"
         for retry in range(3):
@@ -87,7 +83,7 @@ class KuCoinClient:
                 resp = requests.get(url, timeout=10)
                 data = resp.json()
                 tickers = {}
-                print("🔥 using safe_float for all tickers!")  # 调试确认
+                print("🔥 using safe_float for all tickers!")
                 for t in data.get("data", {}).get("ticker", []):
                     tickers[t['symbol']] = {
                         "changeRate": safe_float(t.get("changeRate")),
@@ -164,7 +160,7 @@ class KuCoinClient:
                 time.sleep(2)
         return None
 
-    ### 账户持仓
+    ### 账户资产——返回所有币资产，币名:数量（主流量化结构）
     def get_account_holdings(self):
         endpoint = "/api/v1/accounts"
         url = self.base_url + endpoint
@@ -180,7 +176,7 @@ class KuCoinClient:
                 balance = safe_float(available)
                 if balance > 0:
                     balances[currency] = balances.get(currency, 0) + balance
-            return balances
+            return balances  # { "BTC": 0.18, "USDT": 993.2, ... }
         except Exception as e:
             print(f"[ERROR] 获取账户持仓失败: {e}")
             return {}
@@ -190,14 +186,18 @@ class KuCoinClient:
             return {"USDT": CONFIG.get("SIM_START_BALANCE", 1000)}
         return self.get_account_holdings()
 
-    ### 简化虚拟盘持仓
+    ### 真实多币持仓（币-数量），主流量化兼容
     def get_positions(self, simulate=False):
         if self.simulate or simulate:
-            return {}  # 自行维护虚拟盘明细
-        print("[INFO] 实盘多币种明细持仓可扩展！默认只查主币。")
-        return {}
+            return {}  # 你可以自定义模拟盘结构
+        balances = self.get_account_holdings()
+        positions = {}
+        for coin, amount in balances.items():
+            # 只保留主流币，过滤USDT类
+            if coin not in ["USDT", "USD", "USDC", "DAI"] and amount > 0:
+                positions[f"{coin}-USDT"] = {"amount": amount}
+        return positions  # 如 { "BTC-USDT": {"amount": 0.18}, ... }
 
-    ### 下单（实盘签名，buy funds，sell size）
     def place_order(self, side, symbol, size, price=None):
         symbol_pair = to_symbol_pair(symbol)
         if CONFIG.get("DRY_RUN", False):
