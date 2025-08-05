@@ -15,12 +15,19 @@ def log_snapshot(balances, price_map, tag="snapshot", date_str=None):
         date_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     rows = []
     total_value = 0
+    MAIN_COINS = {"USDT", "USDC", "BTC", "ETH", "DAI"}  # 按你交易所主流货币实际补充
     for symbol, info in balances.items():
         if isinstance(info, dict):
             amount = float(info.get("amount", 0))
         else:
             amount = float(info)
-        price = float(price_map.get(symbol, 0))
+        # 补全 symbol 格式用于查价
+        if symbol in MAIN_COINS or "-" in symbol:
+            query_symbol = symbol
+        else:
+            query_symbol = f"{symbol}-USDT"
+        # 优先查补全后的 symbol, 没查到再降级查原 symbol
+        price = float(price_map.get(query_symbol, price_map.get(symbol, 0)))
         value = amount * price
         rows.append({
             "币种": symbol,
@@ -46,7 +53,6 @@ def log_trade_detail(trade_detail, date_str=None):
         date_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     df = pd.DataFrame([trade_detail])
     filename = os.path.join(LOG_DIR, f"{date_str}_trade_detail.csv")
-    # 如果已存在则追加，否则新建
     if os.path.exists(filename):
         df.to_csv(filename, mode="a", index=False, header=False, encoding="utf-8-sig")
     else:
