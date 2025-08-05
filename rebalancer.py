@@ -4,6 +4,7 @@ from config import CONFIG, TRADE
 from notifier import send_serverchan_notification
 from kucoin_api import KuCoinClient
 from trade_logger import log_trade, log_rebalance
+from log_utils import log_snapshot, log_trade_detail  # 集成日志
 
 _blacklist = set()
 _symbol_buy_cooldown = {}
@@ -56,10 +57,10 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     usdt_total = Decimal(str(CONFIG.get("SIM_START_BALANCE", 100))) if is_simulate else raw_usdt
     usdt_avail = raw_usdt
 
-    positions = {
-        k: v for k, v in positions.items()
-        if get_amount(v) > 0
-    }
+    # 资产快照：调仓前
+    log_snapshot(balances, price_map, tag="before")
+
+    positions = {k: v for k, v in positions.items() if get_amount(v) > 0}
 
     print("🪙 当前持仓市值与成本：")
     hold_total_cost, hold_total_value = Decimal("0"), Decimal("0")
@@ -121,6 +122,20 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             reason = "DROPPED_TOP"
 
         if symbol in sell_list:
+            # 拉一次余额，模拟手续费和滑点（可接入API真实成交信息！）
+            trade_detail = {
+                "类型": "sell",
+                "时间": now,
+                "币种": symbol,
+                "卖出数量": float(amount),
+                "理论卖出价格": float(base_price),
+                "实际成交均价": float(current_price),
+                "滑点": float(current_price-base_price),
+                "手续费": 0,   # 实盘可从api返回获取
+                "卖出到账": float(amount * current_price),
+                "盈亏": float((current_price-base_price) * amount)
+            }
+            log_trade_detail(trade_detail)
             log_trade({
                 "timestamp": now,
                 "type": "sell",
@@ -147,9 +162,8 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         else:
             print(f"[调仓] ❌ 卖出 {symbol} 失败")
 
-    # === 卖出后，强制 sleep 保证资金到账，再拉余额 ===
     if not is_simulate and not DRY_RUN and sell_list:
-        time.sleep(2)  # 可根据实际网络调整 2~3 秒
+        time.sleep(2)
         balances = api.get_account_holdings()
         usdt_avail = Decimal(str(balances.get("USDT", 0)))
 
@@ -165,6 +179,9 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             cur_price = get_entry_price(pos)
         hold_total_value += cur_price * get_amount(pos)
     print(f"  - 持仓币种市值合计: {hold_total_value:.2f}\n")
+
+    # 调仓后快照
+    log_snapshot(balances, price_map, tag="after")
 
     if usdt_avail <= MIN_BUY_AMOUNT:
         print(f"[调仓] 💰 USDT 余额不足（{usdt_avail}），停止买入")
@@ -213,6 +230,19 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
                 }
 
         if result:
+            trade_detail = {
+                "类型": "buy",
+                "时间": now,
+                "币种": symbol,
+                "买入金额": float(buy_amount),
+                "理论买入价格": float(cur_price),
+                "实际成交均价": float(cur_price),  # 实盘可改成实际均价
+                "滑点": 0,
+                "手续费": 0,   # 实盘可接API
+                "买入到账": float(buy_amount),
+                "盈亏": 0  # 买入盈亏为0
+            }
+            log_trade_detail(trade_detail)
             print(f"[调仓] ✅ 买入 {symbol} 成功，金额 {buy_amount}")
             usdt_avail -= buy_amount
             buy_count += 1
