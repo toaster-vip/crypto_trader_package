@@ -9,6 +9,9 @@ from kucoin_api import KuCoinClient
 from rebalancer import rebalance_portfolio, get_blacklist, is_symbol_in_cooldown
 import requests
 
+# ⬇️ 集成资产快照日志工具
+from log_utils import log_snapshot
+
 DEFAULT_WORKERS = CONFIG.get("DEFAULT_WORKERS", 10)
 MIN_TURNOVER_1H = CONFIG.get("MIN_TURNOVER_1H")
 MAX_NEWCOIN_DAYS = CONFIG.get("MAX_NEWCOIN_DAYS", 7)
@@ -18,7 +21,6 @@ TOP_N = CONFIG.get("TOP_N", 5)
 progress_counter = {"done": 0}
 
 def to_symbol_pair(symbol):
-    # 自动把单币名（ELON）补成 ELON-USDT，已经有 - 则直接返回
     if "-" in symbol:
         return symbol
     elif symbol in ["USDT", "USDC", "USDD", "DAI", "BTC", "ETH"]:
@@ -81,9 +83,6 @@ def get_portfolio_stats(positions, price_map):
     return total_value, total_cost, details
 
 def normalize_positions(balances, price_map):
-    """
-    将简单dict的 {币:数量} 持仓结构补全为标准格式，所有后续逻辑都能统一用
-    """
     normalized = {}
     now = time.strftime('%Y-%m-%d %H:%M:%S')
     for symbol, amount in balances.items():
@@ -135,7 +134,6 @@ def main():
 
     progress_thread.join()
 
-    # 各类过滤
     filtered_scores = {}
     turnover_filtered = 0
     blacklist_filtered = 0
@@ -181,6 +179,9 @@ def main():
     positions = normalize_positions(positions_raw, price_map)
     print(f"[主控] 当前账户余额: {balances}")
     print(f"[主控] 当前标准化持仓: {positions}")
+
+    # ========== 新增，调仓前资产快照 ==========
+    log_snapshot(balances, price_map, tag="pre_rebalance")  # 你要的买入前市值/明细都会保存
 
     total_value, total_cost, details = get_portfolio_stats(positions, price_map)
     print(f"[主控] 持仓总市值：{total_value:.2f} USDT，持仓成本：{total_cost:.2f} USDT，浮盈亏：{total_value-total_cost:.2f} USDT")
