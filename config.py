@@ -19,7 +19,7 @@ CONFIG = {
     "WORKER_SLEEP": 0.15,
     "DRY_RUN": False,
     "SIMULATE": True,
-    "SIM_START_BALANCE": 1000,
+    "SIM_START_BALANCE": 100,
     "LOG_DIR": "logs",
     "LOG_DETAIL": True,
     "LOG_LEVEL": "INFO",
