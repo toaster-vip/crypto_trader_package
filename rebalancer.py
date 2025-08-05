@@ -2,7 +2,7 @@ import time
 from decimal import Decimal
 from config import CONFIG
 from log_utils import log_trade_detail, log_info
-from kucoin_api import to_symbol_pair, KuCoinClient
+from kucoin_api import to_symbol_pair
 
 TAKE_PROFIT = Decimal(str(CONFIG["TAKE_PROFIT"]))
 STOP_LOSS = Decimal(str(CONFIG["STOP_LOSS"]))
@@ -20,7 +20,10 @@ def get_amount(pos):
         return Decimal(str(pos.get("amount", 0)))
     return Decimal("0")
 
-def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None, dry_run=False):
+def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None, dry_run=False, api=None):
+    """
+    :param api: 必须传入唯一KuCoinClient实例（主控层全局new，一直复用！）
+    """
     log_info(f"== 调仓轮 == Top池: {top_symbols}")
     usdt = Decimal(str(balances.get("USDT", 0)))
     cur_hold = {to_symbol_pair(k): v for k, v in positions.items() if get_amount(v) > 0}
@@ -28,12 +31,12 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     top_syms_pair = [to_symbol_pair(s) for s in top_symbols]
     total_asset = usdt + sum(get_entry_price(pos) * get_amount(pos) for pos in cur_hold.values())
     per_pos = min(total_asset * MAX_POSITION_RATIO, usdt / max(1, len(top_syms_pair))) if top_syms_pair else Decimal("0")
-    api = KuCoinClient()
 
     for symbol, pos in cur_hold.items():
         entry = get_entry_price(pos)
         amount = get_amount(pos)
-        cur_price = Decimal(str(price_map.get(symbol, api.get_symbol_price(symbol)))) if price_map else api.get_symbol_price(symbol)
+        # 价格优先用price_map，没有则用api实时查价（api必须传）
+        cur_price = Decimal(str(price_map.get(symbol, api.get_symbol_price(symbol)))) if price_map else Decimal(str(api.get_symbol_price(symbol)))
         pnl = (cur_price - entry) / (entry + Decimal('1e-8'))
         trade = {
             "type": "sell_candidate",
@@ -48,7 +51,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             trade["reason"] = "TP/SL"
             log_trade_detail(trade)
             if not dry_run:
-                place_order('sell', symbol, float(amount))  # 卖出现价，数量按模拟或实际资产
+                place_order('sell', symbol, float(amount))
             log_info(f"[平仓] {symbol} 触发止盈止损")
         elif symbol not in top_syms_pair:
             log_info(f"[续持] {symbol} 非热点但未触发止盈止损，留仓")
@@ -72,13 +75,13 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         if symbol not in hold_syms and per_pos >= MIN_BUY_AMOUNT and usdt >= per_pos:
             log_info(f"[买入] {symbol} 买入金额: {float(per_pos):.2f}")
             if not dry_run:
-                place_order('buy', symbol, float(per_pos))  # 买入以USDT为单位
+                place_order('buy', symbol, float(per_pos))
             usdt -= per_pos
             log_trade_detail({
                 "type": "buy",
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "symbol": symbol,
                 "amount": float(per_pos),
-                "price": float(price_map.get(symbol, api.get_symbol_price(symbol))) if price_map else api.get_symbol_price(symbol),
+                "price": float(price_map.get(symbol, api.get_symbol_price(symbol))) if price_map else float(api.get_symbol_price(symbol)),
             })
     log_info("[调仓结束]")
