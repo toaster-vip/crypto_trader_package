@@ -3,15 +3,33 @@ import requests
 import time
 import os
 from config import CONFIG
-from log_utils import log_error, log_debug
+from log_utils import log_error, log_debug, log_info
+
+# 官方SDK需先装 pip install kucoin-python
+try:
+    from kucoin.client import Client as KCClient
+except ImportError:
+    KCClient = None
+
+def to_symbol_pair(symbol):
+    # 自动转化为标准对：如 BTC-USDT
+    symbol = symbol.upper()
+    if "-" in symbol:
+        return symbol
+    if not symbol.endswith("USDT"):
+        return f"{symbol}-USDT"
+    return symbol
 
 class KuCoinClient:
     def __init__(self):
         self.base_url = "https://api.kucoin.com"
-        self.api_key = os.getenv("KUCOIN_API_KEY", "")  # 推荐用环境变量
-        self.api_secret = os.getenv("KUCOIN_API_SECRET", "")
-        self.api_passphrase = os.getenv("KUCOIN_API_PASSPHRASE", "")
-        # ...如需实盘签名，建议加 kucoin-python sdk
+        self.api_key = CONFIG["KUCOIN_API_KEY"]
+        self.api_secret = CONFIG["KUCOIN_API_SECRET"]
+        self.api_passphrase = CONFIG["KUCOIN_API_PASSPHRASE"]
+        self.simulate = CONFIG.get("DRY_RUN", False) or CONFIG.get("SIMULATE", False)
+        self._kc = None
+        if not self.simulate and KCClient and self.api_key:
+            self._kc = KCClient(self.api_key, self.api_secret, self.api_passphrase)
 
     ### --- 热门榜行情 ---
     def get_all_tickers(self):
@@ -34,15 +52,13 @@ class KuCoinClient:
         return {}
 
     def get_all_prices(self):
-        # 返回 {symbol: last_price}
         tickers = self.get_all_tickers()
         return {k: v["last"] for k, v in tickers.items()}
 
     ### --- K线数据 ---
     def get_klines(self, symbol, interval="1hour", limit=100):
-        # interval: '1min', '5min', '15min', '30min', '1hour', ...
         url = self.base_url + "/api/v1/market/candles"
-        params = {"symbol": symbol, "type": interval}
+        params = {"symbol": to_symbol_pair(symbol), "type": interval}
         for retry in range(3):
             try:
                 resp = requests.get(url, params=params, timeout=10)
@@ -66,28 +82,53 @@ class KuCoinClient:
                 time.sleep(2)
         return None
 
-    ### --- 账户资产&持仓 ---
+    ### --- 账户资产 ---
     def get_balances(self, simulate=False):
-        if simulate or CONFIG.get("DRY_RUN", False):
-            return {"USDT": CONFIG.get("SIM_START_BALANCE", 1000)}  # 简单模拟
-        # 实盘需用官方SDK或API签名，这里只留占位
-        log_error("实盘资产查询未实现，需接入API SDK！")
-        return {}
+        if self.simulate or simulate:
+            return {"USDT": CONFIG.get("SIM_START_BALANCE", 1000)}
+        if not self._kc:
+            log_error("未配置KuCoin实盘API，无法查资产")
+            return {}
+        try:
+            balances = self._kc.get_accounts()
+            usdt = next((float(a['available']) for a in balances if a['currency'] == 'USDT' and a['type']=='trade'), 0)
+            return {"USDT": usdt}
+        except Exception as e:
+            log_error(f"实盘查资产异常: {e}")
+            return {}
 
+    ### --- 当前持仓（简易化，按虚拟盘设计，实盘建议扩展到实际持币）---
     def get_positions(self, simulate=False):
-        if simulate or CONFIG.get("DRY_RUN", False):
-            return {}  # 模拟盘没有历史持仓
-        log_error("实盘持仓查询未实现，需接入API SDK！")
+        if self.simulate or simulate:
+            return {}  # 虚拟盘可自定义模拟持仓结构
+        log_info("实盘暂不支持多币明细持仓查询（如需请开发币种资产明细接口）")
         return {}
 
     ### --- 下单接口 ---
     def place_order(self, side, symbol, amount):
-        if CONFIG.get("DRY_RUN", False):
-            log_debug(f"[模拟下单] {side} {symbol} 数量: {amount}")
+        symbol_pair = to_symbol_pair(symbol)
+        if self.simulate:
+            log_info(f"[模拟下单] {side.upper()} {symbol_pair} 数量: {amount}")
             return
-        # 实盘需用官方SDK签名提交，留接口
-        log_error("实盘下单未实现，需接入官方SDK！")
-        return
+        if not self._kc:
+            log_error("未配置KuCoin实盘API，无法实盘下单")
+            return
+        try:
+            # KuCoin仅支持买入时指定资金base/quote
+            side_api = "buy" if side.lower() == "buy" else "sell"
+            if side_api == "buy":
+                # 按资金额买入，市价
+                order = self._kc.create_market_order(symbol_pair, side_api, size=None, funds=str(amount))
+            else:
+                # 卖出建议加 size，需查持仓（如需实盘请实现实际持仓管理）
+                order = self._kc.create_market_order(symbol_pair, side_api, size=str(amount))
+            log_info(f"[实盘下单] {side.upper()} {symbol_pair} 成功: {order}")
+            return order
+        except Exception as e:
+            log_error(f"实盘下单失败: {side} {symbol_pair} {amount}, 错误: {e}")
 
-    ### --- 实盘补充说明 ---
-    # 如需实盘，请用 kucoin-python SDK 并补充签名。此处仅为量化/模拟和主行情API落地演示。
+    ### --- 单币实时价格 ---
+    def get_symbol_price(self, symbol):
+        prices = self.get_all_prices()
+        pair = to_symbol_pair(symbol)
+        return prices.get(pair, None)
