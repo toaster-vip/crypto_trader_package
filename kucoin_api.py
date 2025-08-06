@@ -181,28 +181,25 @@ class KuCoinClient:
             print(f"[ERROR] 获取账户持仓失败: {e}")
             return {}
 
-    def get_balances(self, simulate=False):
-        if self.simulate or simulate:
-            return {"USDT": CONFIG.get("SIM_START_BALANCE", 1000)}
-        return self.get_account_holdings()
-
-    ### 真实多币持仓（币-数量），主流量化兼容
+    ### 真实多币持仓（币-数量），主流量化兼容，结构可后续扩展
     def get_positions(self, simulate=False):
         if self.simulate or simulate:
             return {}  # 你可以自定义模拟盘结构
         balances = self.get_account_holdings()
         positions = {}
         for coin, amount in balances.items():
-            # 只保留主流币，过滤USDT类
             if coin not in ["USDT", "USD", "USDC", "DAI"] and amount > 0:
-                positions[f"{coin}-USDT"] = {"amount": amount}
-        return positions  # 如 { "BTC-USDT": {"amount": 0.18}, ... }
+                positions[f"{coin}-USDT"] = {
+                    "amount": amount,
+                    "entry_price": None  # 可扩展均价（暂未实现）
+                }
+        return positions
 
     def place_order(self, side, symbol, size, price=None):
         symbol_pair = to_symbol_pair(symbol)
-        if CONFIG.get("DRY_RUN", False):
-            print(f"[DRY_RUN] Would {side.upper()} {symbol_pair} size={size} price={price if price else 'market'}")
-            return {"side": side, "symbol": symbol_pair, "size": size, "price": price, "dry_run": True}
+        if self.simulate:
+            log_info(f"[DRY_RUN] Would {side.upper()} {symbol_pair} size={size} price={price if price else 'market'}")
+            return {"side": side, "symbol": symbol_pair, "size": size, "price": price, "dry_run": True, "success": True}
         endpoint = "/api/v1/orders"
         url = self.base_url + endpoint
         order_type = "market" if price is None else "limit"
@@ -226,14 +223,14 @@ class KuCoinClient:
             response = requests.post(url, headers=headers, data=body)
             result = response.json()
             if result.get("code") == "200000":
-                print(f"[✅] 下单成功（{side} {symbol_pair}）: {result['data']['orderId']}")
-                return result["data"]["orderId"]
+                log_info(f"[✅] 下单成功（{side} {symbol_pair}）: {result['data']['orderId']}")
+                return {"order_id": result['data']['orderId'], "side": side, "symbol": symbol_pair, "size": size, "success": True}
             else:
-                print(f"[ERROR] 下单失败: {result}")
-                return None
+                log_error(f"下单失败: {result}")
+                return {"order_id": None, "side": side, "symbol": symbol_pair, "size": size, "success": False, "error": result}
         except Exception as e:
-            print(f"[ERROR] 下单请求异常: {e}")
-            return None
+            log_error(f"下单请求异常: {e}")
+            return {"order_id": None, "side": side, "symbol": symbol_pair, "size": size, "success": False, "error": str(e)}
 
     def get_supported_symbols(self):
         return list(self.symbol_limits_cache.keys())
