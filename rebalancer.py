@@ -1,29 +1,6 @@
-import time
-from decimal import Decimal
-from config import CONFIG
-from log_utils import log_trade_detail, log_info
-from kucoin_api import to_symbol_pair
-
-TAKE_PROFIT = Decimal(str(CONFIG["TAKE_PROFIT"]))
-STOP_LOSS = Decimal(str(CONFIG["STOP_LOSS"]))
-TRAILING_STOP_PCT = Decimal(str(CONFIG["TRAILING_STOP_PCT"]))
-MAX_POSITION_RATIO = Decimal(str(CONFIG["MAX_POSITION_RATIO"]))
-MIN_BUY_AMOUNT = Decimal(str(CONFIG["MIN_BUY_AMOUNT"]))
-
-def get_entry_price(pos):
-    if isinstance(pos, dict):
-        return Decimal(str(pos.get("entry_price", 0)))
-    return Decimal("0")
-
-def get_amount(pos):
-    if isinstance(pos, dict):
-        return Decimal(str(pos.get("amount", 0)))
-    return Decimal("0")
-
 def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None, dry_run=False, api=None):
-    """
-    :param api: 必须传入唯一KuCoinClient实例（主控层全局new，一直复用！）
-    """
+    if api is None:
+        raise ValueError("必须传入唯一的 KuCoinClient api 实例！（请主控调用时用 api=api 传入）")
     log_info(f"== 调仓轮 == Top池: {top_symbols}")
     usdt = Decimal(str(balances.get("USDT", 0)))
     cur_hold = {to_symbol_pair(k): v for k, v in positions.items() if get_amount(v) > 0}
@@ -35,8 +12,10 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     for symbol, pos in cur_hold.items():
         entry = get_entry_price(pos)
         amount = get_amount(pos)
-        # 价格优先用price_map，没有则用api实时查价（api必须传）
-        cur_price = Decimal(str(price_map.get(symbol, api.get_symbol_price(symbol)))) if price_map else Decimal(str(api.get_symbol_price(symbol)))
+        if price_map and symbol in price_map:
+            cur_price = Decimal(str(price_map[symbol]))
+        else:
+            cur_price = Decimal(str(api.get_symbol_price(symbol)))
         pnl = (cur_price - entry) / (entry + Decimal('1e-8'))
         trade = {
             "type": "sell_candidate",
@@ -77,11 +56,15 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             if not dry_run:
                 place_order('buy', symbol, float(per_pos))
             usdt -= per_pos
+            if price_map and symbol in price_map:
+                buy_price = float(price_map[symbol])
+            else:
+                buy_price = float(api.get_symbol_price(symbol))
             log_trade_detail({
                 "type": "buy",
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "symbol": symbol,
                 "amount": float(per_pos),
-                "price": float(price_map.get(symbol, api.get_symbol_price(symbol))) if price_map else float(api.get_symbol_price(symbol)),
+                "price": buy_price,
             })
     log_info("[调仓结束]")
