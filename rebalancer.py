@@ -1,8 +1,14 @@
 import time
 from decimal import Decimal
 from config import CONFIG
-from log_utils import log_info, log_trade_detail   # <== 这行很关键
+from log_utils import log_info, log_trade_detail
 from kucoin_api import to_symbol_pair
+
+TAKE_PROFIT = Decimal(str(CONFIG["TAKE_PROFIT"]))
+STOP_LOSS = Decimal(str(CONFIG["STOP_LOSS"]))
+TRAILING_STOP_PCT = Decimal(str(CONFIG["TRAILING_STOP_PCT"]))
+MAX_POSITION_RATIO = Decimal(str(CONFIG["MAX_POSITION_RATIO"]))
+MIN_BUY_AMOUNT = Decimal(str(CONFIG["MIN_BUY_AMOUNT"]))
 
 def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None, dry_run=False, api=None):
     if api is None:
