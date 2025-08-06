@@ -18,7 +18,7 @@ CONFIG = {
     "DEFAULT_WORKERS": 10,
     "WORKER_SLEEP": 0.15,
     "DRY_RUN": False,
-    "SIMULATE": True,
+    "SIMULATE": False,
     "SIM_START_BALANCE": 100,
     "LOG_DIR": "logs",
     "LOG_DETAIL": True,
