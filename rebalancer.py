@@ -7,6 +7,7 @@ from kucoin_api import to_symbol_pair
 # 工具函数
 def get_entry_price(pos):
     if isinstance(pos, dict):
+        # 允许默认模拟持仓不带entry_price字段
         return Decimal(str(pos.get("entry_price", 0)))
     return Decimal("0")
 
@@ -82,13 +83,20 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         else:
             log_info(f"[持有] {symbol} 正常持有")
 
-    # 2. 新热点买入
+    # 2. 新热点买入（步进修正，兼容主流所资金最小单位）
     for symbol in top_syms_pair:
         if symbol not in hold_syms and per_pos >= MIN_BUY_AMOUNT and usdt >= per_pos:
-            log_info(f"[买入] {symbol} 买入金额: {float(per_pos):.2f}")
+            # 步进修正
+            limits = api.get_symbol_limits(symbol)
+            funds_increment = limits.get("minFunds", 0.01) if limits else 0.01
+            rounded_amt = (float(per_pos) // funds_increment) * funds_increment
+            if rounded_amt < funds_increment:
+                log_info(f"[跳过] {symbol} 可买金额不足步进要求（minFunds={funds_increment}），跳过！")
+                continue
+            log_info(f"[买入] {symbol} 买入金额: {rounded_amt:.2f}")
             if not dry_run:
-                place_order('buy', symbol, float(per_pos))
-            usdt -= per_pos
+                place_order('buy', symbol, rounded_amt)
+            usdt -= Decimal(str(rounded_amt))
             if price_map and symbol in price_map:
                 buy_price = float(price_map[symbol])
             else:
@@ -101,7 +109,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
                 "type": "buy",
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "symbol": symbol,
-                "amount": float(per_pos),
+                "amount": float(rounded_amt),
                 "price": buy_price,
             })
     log_info("[调仓结束]")
