@@ -20,11 +20,10 @@ def main():
     if not hot_symbols:
         log_error("本轮无热点币，暂停运行")
         return
-    # 标准化币对格式
     hot_symbols = [to_symbol_pair(s) for s in hot_symbols]
     log_info(f"本轮热点池: {hot_symbols}")
 
-    # 多线程评分（传入唯一api实例）
+    # 多线程评分
     with concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG["DEFAULT_WORKERS"]) as executor:
         futures = [executor.submit(fetch_score, api, s) for s in hot_symbols]
         results = [f.result() for f in concurrent.futures.as_completed(futures)]
@@ -48,14 +47,15 @@ def main():
     price_map = api.get_all_prices() or {}
     log_snapshot(balances, price_map, tag="before")
 
-    # 调仓
+    # 调仓（关键！必须api=api）
     rebalance_portfolio(
         top_symbols,
         balances,
         positions,
         api.place_order,
         price_map,
-        dry_run=CONFIG["DRY_RUN"]
+        dry_run=CONFIG["DRY_RUN"],
+        api=api,    # ★★★ 这里一定要传
     )
 
     # 资产快照后
