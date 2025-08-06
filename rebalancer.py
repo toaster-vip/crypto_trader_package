@@ -4,10 +4,9 @@ from config import CONFIG
 from log_utils import log_info, log_trade_detail
 from kucoin_api import to_symbol_pair
 
-# 必须放在顶部，避免NameError
+# 工具函数
 def get_entry_price(pos):
     if isinstance(pos, dict):
-        # 允许默认模拟持仓不带entry_price字段
         return Decimal(str(pos.get("entry_price", 0)))
     return Decimal("0")
 
@@ -24,7 +23,7 @@ MIN_BUY_AMOUNT = Decimal(str(CONFIG["MIN_BUY_AMOUNT"]))
 
 def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None, dry_run=False, api=None):
     """
-    调仓逻辑。api为必传：唯一的KuCoinClient实例（全局只初始化一次）。
+    调仓逻辑（兼容多币种/主流量化风格）。api为必传：唯一KuCoinClient实例（全局只初始化一次）。
     """
     if api is None:
         raise ValueError("必须传入唯一的 KuCoinClient api 实例！（主控请用 rebalance_portfolio(..., api=api)）")
@@ -41,11 +40,15 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     for symbol, pos in cur_hold.items():
         entry = get_entry_price(pos)
         amount = get_amount(pos)
-        # 优先用price_map，无则api实时查价（api必须传）
+        # 防御：行情API丢失、退市时跳过（不会崩溃）
         if price_map and symbol in price_map:
-            cur_price = Decimal(str(price_map[symbol]))
+            cur_price_raw = price_map[symbol]
         else:
-            cur_price = Decimal(str(api.get_symbol_price(symbol)))
+            cur_price_raw = api.get_symbol_price(symbol)
+        if cur_price_raw is None:
+            log_info(f"[跳过] {symbol} 无法获取当前价格，自动跳过卖出/持有决策！")
+            continue
+        cur_price = Decimal(str(cur_price_raw))
         pnl = (cur_price - entry) / (entry + Decimal('1e-8'))
         trade = {
             "type": "sell_candidate",
@@ -89,7 +92,11 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             if price_map and symbol in price_map:
                 buy_price = float(price_map[symbol])
             else:
-                buy_price = float(api.get_symbol_price(symbol))
+                buy_price_raw = api.get_symbol_price(symbol)
+                if buy_price_raw is None:
+                    log_info(f"[跳过] {symbol} 买入时无法获价，跳过！")
+                    continue
+                buy_price = float(buy_price_raw)
             log_trade_detail({
                 "type": "buy",
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
