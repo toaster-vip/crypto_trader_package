@@ -4,6 +4,18 @@ from config import CONFIG
 from log_utils import log_info, log_trade_detail
 from kucoin_api import to_symbol_pair
 
+# 必须放在顶部，避免NameError
+def get_entry_price(pos):
+    if isinstance(pos, dict):
+        # 允许默认模拟持仓不带entry_price字段
+        return Decimal(str(pos.get("entry_price", 0)))
+    return Decimal("0")
+
+def get_amount(pos):
+    if isinstance(pos, dict):
+        return Decimal(str(pos.get("amount", 0)))
+    return Decimal("0")
+
 TAKE_PROFIT = Decimal(str(CONFIG["TAKE_PROFIT"]))
 STOP_LOSS = Decimal(str(CONFIG["STOP_LOSS"]))
 TRAILING_STOP_PCT = Decimal(str(CONFIG["TRAILING_STOP_PCT"]))
@@ -11,8 +23,12 @@ MAX_POSITION_RATIO = Decimal(str(CONFIG["MAX_POSITION_RATIO"]))
 MIN_BUY_AMOUNT = Decimal(str(CONFIG["MIN_BUY_AMOUNT"]))
 
 def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None, dry_run=False, api=None):
+    """
+    调仓逻辑。api为必传：唯一的KuCoinClient实例（全局只初始化一次）。
+    """
     if api is None:
-        raise ValueError("必须传入唯一的 KuCoinClient api 实例！（请主控调用时用 api=api 传入）")
+        raise ValueError("必须传入唯一的 KuCoinClient api 实例！（主控请用 rebalance_portfolio(..., api=api)）")
+
     log_info(f"== 调仓轮 == Top池: {top_symbols}")
     usdt = Decimal(str(balances.get("USDT", 0)))
     cur_hold = {to_symbol_pair(k): v for k, v in positions.items() if get_amount(v) > 0}
@@ -21,9 +37,11 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     total_asset = usdt + sum(get_entry_price(pos) * get_amount(pos) for pos in cur_hold.values())
     per_pos = min(total_asset * MAX_POSITION_RATIO, usdt / max(1, len(top_syms_pair))) if top_syms_pair else Decimal("0")
 
+    # 1. 卖出/止盈止损/非热点处理
     for symbol, pos in cur_hold.items():
         entry = get_entry_price(pos)
         amount = get_amount(pos)
+        # 优先用price_map，无则api实时查价（api必须传）
         if price_map and symbol in price_map:
             cur_price = Decimal(str(price_map[symbol]))
         else:
@@ -61,7 +79,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         else:
             log_info(f"[持有] {symbol} 正常持有")
 
-    # 新热点补仓
+    # 2. 新热点买入
     for symbol in top_syms_pair:
         if symbol not in hold_syms and per_pos >= MIN_BUY_AMOUNT and usdt >= per_pos:
             log_info(f"[买入] {symbol} 买入金额: {float(per_pos):.2f}")
