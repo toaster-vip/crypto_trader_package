@@ -166,17 +166,17 @@ class KuCoinClient:
     # ============ 关键：币币/现货成交明细接口（必须加 tradeType=TRADE） ============
     def get_fills(self, symbol, side=None, limit=50):
         """
-        拉取最近的币币（现货）成交明细。
+        拉取最近的币币（现货）成交明细。官方要求 tradeType="TRADE" 且分页参数为 pageSize。
         """
         endpoint = "/api/v1/fills"
         url = self.base_url + endpoint
         params = {
             "symbol": to_symbol_pair(symbol),
             "tradeType": "TRADE",    # 必须！表示币币/现货
-            "pageSize": limit
+            "pageSize": limit        # 必须是 pageSize！
         }
         if side:
-            params["side"] = side
+            params["side"] = side    # "buy" 或 "sell"
         headers = self._get_headers("GET", endpoint)
         try:
             response = requests.get(url, headers=headers, params=params, timeout=10)
