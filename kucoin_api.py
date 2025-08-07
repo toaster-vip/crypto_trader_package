@@ -163,7 +163,6 @@ class KuCoinClient:
                 time.sleep(2)
         return None
 
-    # ============ 关键：币币/现货成交明细接口（必须加 tradeType=TRADE） ============
     def get_fills(self, symbol, side=None, limit=50):
         """
         拉取最近的币币（现货）成交明细。官方要求 tradeType="TRADE" 且分页参数为 pageSize。
@@ -177,7 +176,8 @@ class KuCoinClient:
         }
         if side:
             params["side"] = side    # "buy" 或 "sell"
-        headers = self._get_headers("GET", endpoint)
+        # 关键：GET必须显式body=""
+        headers = self._get_headers("GET", endpoint, body="")
         try:
             response = requests.get(url, headers=headers, params=params, timeout=10)
             data = response.json()
