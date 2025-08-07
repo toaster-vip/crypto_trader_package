@@ -203,16 +203,15 @@ class KuCoinClient:
             balances = {}
             for acc in data.get("data", []):
                 currency = acc["currency"]
-                balance = safe_float(acc.get("available") or acc.get("balance") or 0)
-                acct_type = acc.get("type", "").lower()
-                # 主账户(main) + 交易账户(trade) 一起统计
-                if balance > 0 and acct_type in ["main", "trade"]:
+                available = acc.get("available") or acc.get("balance") or 0
+                balance = safe_float(available)
+                if balance > 0:
                     balances[currency] = balances.get(currency, 0) + balance
             return balances
         except Exception as e:
             print(f"[ERROR] 获取账户持仓失败: {e}")
             return {}
-
+        
     def get_balances(self, simulate=False):
         if self.simulate or simulate:
             return {"USDT": CONFIG.get("SIM_START_BALANCE", 1000)}
