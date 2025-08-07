@@ -10,7 +10,7 @@ from log_utils import log_snapshot, log_info, log_error
 
 # ==== 冷却机制相关 ====
 COOLDOWN_FILE = "/home/linuxuser/crypto_trader_package/cooldown_pool.json"
-COOLDOWN_ROUNDS = CONFIG.get("COOLDOWN_ROUNDS", 3)  # 冷却3轮（比如12小时）
+COOLDOWN_ROUNDS = CONFIG.get("COOLDOWN_ROUNDS", 3)  # 冷却几轮，强烈建议3
 
 def load_cooldown_pool():
     if os.path.exists(COOLDOWN_FILE):
