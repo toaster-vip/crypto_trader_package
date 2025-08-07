@@ -1,45 +1,83 @@
-import time
-from kucoin_api import KuCoinClient
+#!/bin/bash
 
-# 这里直接硬编码 API 信息，优先用于测试
-class KuCoinClientTest(KuCoinClient):
-    def __init__(self):
-        self.api_key = "6894b5c7dffe710001e70b3e"
-        self.api_secret = "b227a741-6a74-4ac5-9445-4a6c256adedd"
-        self.passphrase = "1234567"
-        self.base_url = "https://api.kucoin.com"
-        self.simulate = False
-        self.symbol_limits_cache = {}
-        self._init_symbol_limits_cache()
-        print("🔑 [KuCoinClient] 使用硬编码API KEY:", self.api_key[:5] + "***")
-        print("📁 [KuCoinClientTest] API Key硬编码测试模式加载成功")
+# 分支名参数，默认 main
+TARGET_BRANCH="${1:-main}"
 
-def test_kucoin_client():
-    client = KuCoinClientTest()
+# ✅ 加载 .env 环境变量（确保路径正确）
+export $(grep -v '^#' /home/linuxuser/crypto_trader_package/.env | xargs)
 
-    print("=== 🔍 测试 KuCoin API 功能 ===")
+# ✅ 激活虚拟环境
+source /home/linuxuser/taenv/bin/activate
 
-    # 1. 获取账户持仓
-    print("\n[1] 获取账户持仓：")
-    holdings = client.get_account_holdings()
-    print(holdings)
+# ========== 配置 ==========
+PROJECT_DIR="/home/linuxuser/crypto_trader_package"
+VENV_DIR="/home/linuxuser/taenv"
+LOCKFILE="/tmp/crypto_trader_lockfile"
+LOG_DIR="/home/linuxuser/trade_logs"
+MAX_RUNTIME=600  # 最大允许 main_trader.py 运行时间（秒）
+LOGFILE="$LOG_DIR/cron_runonce_$(date '+%Y%m%d').log"
 
-    print("\n[2] 获取支持交易的 USDT 对：")
-    symbols = client.get_supported_symbols()
-    print(f"共 {len(symbols)} 个交易对，示例：", symbols[:5])
+# ========== 函数：日志输出 ==========
+log() {
+    echo "[$(date '+%F %T')] $1" | tee -a "$LOGFILE"
+}
 
-    # 3. 获取实时价格
-    test_symbol = "XLM-USDT"
-    print(f"\n[3] 获取当前价格：{test_symbol}")
-    price = client.get_symbol_price(test_symbol)
-    print(f"{test_symbol} 当前价格: {price}")
+# ========== 检查并创建日志目录 ==========
+mkdir -p "$LOG_DIR"
 
-    # 4. 测试历史成交明细 fills（只取最新5条买单）
-    print(f"\n[4] 获取历史成交明细 fills（测试币种：{test_symbol}，只取最新5条买单）")
-    fills = client.get_fills(test_symbol, side="buy", limit=5)
-    print(fills)
+# ========== 清理运行超时的进程 ==========
+log "🔍 检查运行超时的 main_trader.py..."
+ps -eo pid,etimes,cmd | grep "[m]ain_trader.py" | while read pid etime cmd; do
+    if [ "$etime" -ge "$MAX_RUNTIME" ]; then
+        log "⏱️ main_trader.py 已运行 $etime 秒，超过 $MAX_RUNTIME 秒，自动 kill PID=$pid"
+        kill -9 "$pid"
+    fi
+done
 
-    print("\n✅ 所有 API 测试完成")
+# ========== 检查锁文件 ==========
+if [ -e "$LOCKFILE" ]; then
+    log "🚫 检测到锁文件，跳过本轮执行：$LOCKFILE"
+    exit 1
+fi
 
-if __name__ == "__main__":
-    test_kucoin_client()
+# ========== 创建锁文件 ==========
+touch "$LOCKFILE"
+log "🚀 开始执行 run_once.sh"
+
+# ========== 激活虚拟环境 ==========
+log "✅ 激活虚拟环境：$VENV_DIR"
+source "$VENV_DIR/bin/activate"
+
+# ========== 进入项目目录 ==========
+cd "$PROJECT_DIR" || {
+    log "❌ 无法进入项目目录 $PROJECT_DIR"
+    rm -f "$LOCKFILE"
+    exit 1
+}
+
+# ========== 拉取最新 Git 代码，动态切换分支 ==========
+TARGET_BRANCH="${1:-main}"  # 支持传参，也可直接修改这里默认分支
+log "🔄 尝试切换并拉取 Git 分支 $TARGET_BRANCH ..."
+git fetch origin
+git checkout $TARGET_BRANCH || {
+    log "❌ 切换分支失败，跳过执行"
+    rm -f "$LOCKFILE"
+    exit 1
+}
+git reset --hard origin/$TARGET_BRANCH
+git clean -fd
+git pull origin $TARGET_BRANCH || {
+    log "⚠️ Git 拉取失败，跳过执行"
+    rm -f "$LOCKFILE"
+    exit 1
+}
+
+# ========== 执行主程序 ==========
+log "▶️ 执行 main_trader.py..."
+python3 main_trader.py
+RESULT=$?
+
+# ========== 清理锁文件 ==========
+rm -f "$LOCKFILE"
+log "✅ 本轮执行完毕，退出码：$RESULT"
+exit $RESULT
