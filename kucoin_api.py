@@ -31,12 +31,6 @@ class KuCoinClient:
         print("🔑 [KuCoinClient] 使用 KuCoin API KEY:", self.api_key[:5] + "***")
         print("📁 [KuCoinClient] config.py 加载成功")
         self._init_symbol_limits_cache()
-        print("==== KuCoin API 参数检查 ====")
-        print(f"API KEY      = {self.api_key!r}")
-        print(f"API SECRET   = {self.api_secret!r}")
-        print(f"PASSPHRASE   = {self.passphrase!r}")
-        print("============================")
-        self._init_symbol_limits_cache()
 
     def _get_headers(self, method, endpoint, body=""):
         now = str(int(time.time() * 1000))
