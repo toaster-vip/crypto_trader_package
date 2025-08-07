@@ -1,3 +1,4 @@
+# kucoin_api.py
 import requests
 import time
 import hmac
@@ -160,6 +161,28 @@ class KuCoinClient:
                 time.sleep(2)
         return None
 
+    # ======= 新增：获取历史成交明细（买入单） =======
+    def get_fills(self, symbol, side="buy", limit=100):
+        """获取历史成交明细，支持筛选side=buy/sell"""
+        endpoint = "/api/v1/fills"
+        url = self.base_url + endpoint
+        params = {
+            "symbol": to_symbol_pair(symbol),
+            "side": side,
+            "limit": limit
+        }
+        headers = self._get_headers("GET", endpoint)
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            data = response.json()
+            if not data or "data" not in data or "items" not in data["data"]:
+                log_info(f"[get_fills] 无法获取成交明细: {symbol}")
+                return []
+            return data["data"]["items"]
+        except Exception as e:
+            log_info(f"[get_fills] 拉取失败: {symbol}: {e}")
+            return []
+
     ### 账户资产——返回所有币资产，币名:数量（主流量化结构）
     def get_account_holdings(self):
         endpoint = "/api/v1/accounts"
@@ -182,24 +205,19 @@ class KuCoinClient:
             return {}
 
     def get_balances(self, simulate=False):
-        """
-        获取账户全部币种资产，主流量化结构
-        """
         if self.simulate or simulate:
             return {"USDT": CONFIG.get("SIM_START_BALANCE", 1000)}
         return self.get_account_holdings()
 
-    ### 真实多币持仓（币-数量），主流量化兼容
     def get_positions(self, simulate=False):
         if self.simulate or simulate:
-            return {}  # 你可以自定义模拟盘结构
+            return {}
         balances = self.get_account_holdings()
         positions = {}
         for coin, amount in balances.items():
-            # 只保留主流币，过滤USDT类
             if coin not in ["USDT", "USD", "USDC", "DAI"] and amount > 0:
                 positions[f"{coin}-USDT"] = {"amount": amount}
-        return positions  # 如 { "BTC-USDT": {"amount": 0.18}, ... }
+        return positions
 
     def place_order(self, side, symbol, size, price=None):
         symbol_pair = to_symbol_pair(symbol)
