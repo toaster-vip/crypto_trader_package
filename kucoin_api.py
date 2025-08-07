@@ -1,4 +1,3 @@
-# kucoin_api.py
 import requests
 import time
 import hmac
@@ -162,28 +161,32 @@ class KuCoinClient:
         return None
 
     # ======= 新增：获取历史成交明细（买入单） =======
-    def get_fills(self, symbol, side="buy", limit=100):
-        """获取历史成交明细，支持筛选side=buy/sell"""
+    def get_fills(self, symbol, side=None, limit=50):
+        """
+        拉取最近的真实成交明细，用于回填成本价。
+        """
         endpoint = "/api/v1/fills"
         url = self.base_url + endpoint
-        params = {
-            "symbol": to_symbol_pair(symbol),
-            "side": side,
-            "limit": limit
-        }
+        params = {"symbol": to_symbol_pair(symbol), "limit": limit}
+        if side:
+            params["side"] = side
         headers = self._get_headers("GET", endpoint)
         try:
-            response = requests.get(url, headers=headers, params=params)
+            response = requests.get(url, headers=headers, params=params, timeout=10)
             data = response.json()
-            if not data or "data" not in data or "items" not in data["data"]:
-                log_info(f"[get_fills] 无法获取成交明细: {symbol}")
+            if data.get("code") == "200000":
+                fills = data.get("data", {}).get("items", [])
+                log_info(f"[get_fills] {symbol} 返回 {len(fills)} 条成交记录")
+                if len(fills) == 0:
+                    log_info(f"[get_fills] API原始返回: {data}")
+                return fills
+            else:
+                log_info(f"[get_fills] 失败: {data}")
                 return []
-            return data["data"]["items"]
         except Exception as e:
-            log_info(f"[get_fills] 拉取失败: {symbol}: {e}")
+            log_info(f"[get_fills] 异常: {e}")
             return []
 
-    ### 账户资产——返回所有币资产，币名:数量（主流量化结构）
     def get_account_holdings(self):
         endpoint = "/api/v1/accounts"
         url = self.base_url + endpoint
@@ -199,7 +202,7 @@ class KuCoinClient:
                 balance = safe_float(available)
                 if balance > 0:
                     balances[currency] = balances.get(currency, 0) + balance
-            return balances  # { "BTC": 0.18, "USDT": 993.2, ... }
+            return balances
         except Exception as e:
             print(f"[ERROR] 获取账户持仓失败: {e}")
             return {}
