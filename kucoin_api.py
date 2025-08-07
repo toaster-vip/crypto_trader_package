@@ -176,9 +176,16 @@ class KuCoinClient:
         try:
             response = requests.get(url, headers=headers)
             data = response.json()
-            print("[DEBUG] KuCoin 返回:", json.dumps(data, indent=2, ensure_ascii=False))
+            # 不打印 data
             balances = {}
-            print("[DEBUG] 统计后:", balances)
+            for acc in data.get("data", []):
+                currency = acc["currency"]
+                acc_type = acc.get("type", "")
+                available = acc.get("available") or acc.get("balance") or 0
+                balance = safe_float(available)
+                if balance > 0:
+                    balances[currency] = balances.get(currency, 0) + balance
+            # 不打印 balances
             return balances
         except Exception as e:
             print(f"[ERROR] 获取账户持仓失败: {e}")
