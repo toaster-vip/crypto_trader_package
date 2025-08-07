@@ -178,12 +178,6 @@ class KuCoinClient:
             data = response.json()
             print("[DEBUG] KuCoin 返回:", json.dumps(data, indent=2, ensure_ascii=False))
             balances = {}
-            for acc in data.get("data", []):
-                currency = acc["currency"]
-                available = acc.get("available") or acc.get("balance") or 0
-                balance = safe_float(available)
-                if balance > 0:
-                    balances[currency] = balances.get(currency, 0) + balance
             print("[DEBUG] 统计后:", balances)
             return balances
         except Exception as e:
