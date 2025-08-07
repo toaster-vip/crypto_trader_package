@@ -245,6 +245,30 @@ class KuCoinClient:
         except Exception as e:
             print(f"[ERROR] 下单请求异常: {e}")
             return None
+            
+    def get_fills(self, symbol, side=None, limit=50):
+        endpoint = "/api/v1/fills"
+        url = self.base_url + endpoint
+        params = {
+            "symbol": symbol,
+            "tradeType": "TRADE",
+            "pageSize": limit
+        }
+        if side:
+            params["side"] = side
+        headers = self._get_headers("GET", endpoint)
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+            data = response.json()
+            if data.get("code") == "200000":
+                fills = data.get("data", {}).get("items", [])
+                return fills
+            else:
+                print(f"[get_fills] 失败: {data}")
+                return []
+        except Exception as e:
+            print(f"[get_fills] 异常: {e}")
+            return []
 
     def get_supported_symbols(self):
         return list(self.symbol_limits_cache.keys())
