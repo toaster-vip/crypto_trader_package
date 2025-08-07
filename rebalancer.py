@@ -45,7 +45,7 @@ def rebalance_portfolio(
     cooldown_pool=None, current_round=None, cooldown_rounds=COOLDOWN_ROUNDS
 ):
     """
-    主调仓函数：支持冷却池和动态entry price
+    主调仓函数：支持冷却池和动态entry price，集成调试日志
     """
     if api is None:
         raise ValueError("必须传入唯一的 KuCoinClient api 实例！（主控请用 rebalance_portfolio(..., api=api)）")
@@ -99,20 +99,28 @@ def rebalance_portfolio(
                     cooldown_pool[sym] = current_round + cooldown_rounds
                 if sym in entry_price_state:
                     entry_price_state.pop(sym)
-            log_info(f"[止损] {sym} 触发止损，卖出并冷却{cooldown_rounds}轮")
+            log_info(
+                f"[止损] {sym} 触发止损，卖出并冷却{cooldown_rounds}轮 | 买入价={entry} | 当前价={cur_price} | 盈亏={pnl:.4%}"
+            )
             continue
 
         # ---- 动态止盈，如果还在TopN，只更新成本价，不卖
         if sym in top_syms_pair and pnl >= TAKE_PROFIT:
             entry_price_state[sym] = float(cur_price)
-            log_info(f"[动态止盈] {sym} 达到止盈线且仍为TopN，动态上移entry price: {cur_price}")
+            log_info(
+                f"[动态止盈] {sym} 达到止盈线且仍为TopN，动态上移entry price: {cur_price} | 原entry: {entry} | 当前价={cur_price} | 盈亏={pnl:.4%}"
+            )
             continue
 
         # ---- 如果不在Top池且也没触发止损止盈，续持
         if sym not in top_syms_pair:
-            log_info(f"[续持] {sym} 非热点但未触发止盈止损，留仓")
+            log_info(
+                f"[续持] {sym} 非热点但未触发止盈止损，留仓 | 买入价={entry} | 当前价={cur_price} | 盈亏={pnl:.4%} | 止损线={STOP_LOSS:.2%} | 止盈线={TAKE_PROFIT:.2%}"
+            )
         else:
-            log_info(f"[持有] {sym} 正常持有")
+            log_info(
+                f"[持有] {sym} 正常持有 | 买入价={entry} | 当前价={cur_price} | 盈亏={pnl:.4%} | 止损线={STOP_LOSS:.2%} | 止盈线={TAKE_PROFIT:.2%}"
+            )
 
     # ========== 2. 卖出后刷新usdt余额 ==========
     if not dry_run:
