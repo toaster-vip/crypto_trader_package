@@ -23,10 +23,9 @@ def to_symbol_pair(symbol):
 
 class KuCoinClient:
     def __init__(self):
-        # 支持从环境/本地/硬编码加载
-        self.api_key = CONFIG.get("KUCOIN_API_KEY")
-        self.api_secret = CONFIG.get("KUCOIN_API_SECRET")
-        self.passphrase = CONFIG.get("KUCOIN_API_PASSPHRASE")
+        self.api_key = CONFIG["KUCOIN_API_KEY"]
+        self.api_secret = CONFIG["KUCOIN_API_SECRET"]
+        self.passphrase = CONFIG["KUCOIN_API_PASSPHRASE"]
         self.base_url = "https://api.kucoin.com"
         self.simulate = CONFIG.get("DRY_RUN", False) or CONFIG.get("SIMULATE", False)
         self.symbol_limits_cache = {}
@@ -37,8 +36,6 @@ class KuCoinClient:
 
     def _get_headers(self, method, endpoint, body=""):
         now = str(int(time.time() * 1000))
-        if body is None:
-            body = ""
         str_to_sign = now + method.upper() + endpoint + body
         signature = base64.b64encode(
             hmac.new(self.api_secret.encode(), str_to_sign.encode(), hashlib.sha256).digest()
@@ -163,36 +160,7 @@ class KuCoinClient:
                 time.sleep(2)
         return None
 
-    def get_fills(self, symbol, side=None, limit=50):
-        endpoint = "/api/v1/fills"
-        url = self.base_url + endpoint
-        params = {
-            "symbol": to_symbol_pair(symbol),
-            "tradeType": "TRADE",
-            "pageSize": limit
-        }
-        if side:
-            params["side"] = side
-        # Debug: 打印签名字符串和 headers
-        headers = self._get_headers("GET", endpoint, body="")
-        print(f"[DEBUG] headers: {headers}")
-        print(f"[DEBUG] params: {params}")
-        try:
-            response = requests.get(url, headers=headers, params=params, timeout=10)
-            print(f"[DEBUG] url: {response.url}")
-            data = response.json()
-            print(f"[DEBUG] fills API response: {data}")
-            if data.get("code") == "200000":
-                fills = data.get("data", {}).get("items", [])
-                log_info(f"[get_fills] {symbol} 返回 {len(fills)} 条成交记录")
-                return fills
-            else:
-                log_info(f"[get_fills] 失败: {data}")
-                return []
-        except Exception as e:
-            log_info(f"[get_fills] 异常: {e}")
-            return []
-
+    ### 账户资产——返回所有币资产，币名:数量（主流量化结构）
     def get_account_holdings(self):
         endpoint = "/api/v1/accounts"
         url = self.base_url + endpoint
@@ -203,29 +171,35 @@ class KuCoinClient:
             balances = {}
             for acc in data.get("data", []):
                 currency = acc["currency"]
+                acc_type = acc.get("type", "")
                 available = acc.get("available") or acc.get("balance") or 0
                 balance = safe_float(available)
                 if balance > 0:
                     balances[currency] = balances.get(currency, 0) + balance
-            return balances
+            return balances  # { "BTC": 0.18, "USDT": 993.2, ... }
         except Exception as e:
             print(f"[ERROR] 获取账户持仓失败: {e}")
             return {}
-        
+
     def get_balances(self, simulate=False):
+        """
+        获取账户全部币种资产，主流量化结构
+        """
         if self.simulate or simulate:
             return {"USDT": CONFIG.get("SIM_START_BALANCE", 1000)}
         return self.get_account_holdings()
 
+    ### 真实多币持仓（币-数量），主流量化兼容
     def get_positions(self, simulate=False):
         if self.simulate or simulate:
-            return {}
+            return {}  # 你可以自定义模拟盘结构
         balances = self.get_account_holdings()
         positions = {}
         for coin, amount in balances.items():
+            # 只保留主流币，过滤USDT类
             if coin not in ["USDT", "USD", "USDC", "DAI"] and amount > 0:
                 positions[f"{coin}-USDT"] = {"amount": amount}
-        return positions
+        return positions  # 如 { "BTC-USDT": {"amount": 0.18}, ... }
 
     def place_order(self, side, symbol, size, price=None):
         symbol_pair = to_symbol_pair(symbol)
