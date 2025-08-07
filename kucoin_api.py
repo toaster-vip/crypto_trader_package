@@ -5,7 +5,6 @@ import base64
 import hashlib
 import json
 from config import CONFIG
-from log_utils import log_error, log_debug, log_info
 
 def safe_float(x, default=0.0):
     try:
@@ -29,13 +28,14 @@ class KuCoinClient:
         self.base_url = "https://api.kucoin.com"
         self.simulate = CONFIG.get("DRY_RUN", False) or CONFIG.get("SIMULATE", False)
         self.symbol_limits_cache = {}
-        self._init_symbol_limits_cache()
-        if self.api_key:
-            print("🔑 [KuCoinClient] 使用 KuCoin API KEY:", self.api_key[:5] + "***")
+        print("🔑 [KuCoinClient] 使用 KuCoin API KEY:", self.api_key[:5] + "***")
         print("📁 [KuCoinClient] config.py 加载成功")
+        self._init_symbol_limits_cache()
 
     def _get_headers(self, method, endpoint, body=""):
         now = str(int(time.time() * 1000))
+        if body is None:
+            body = ""
         str_to_sign = now + method.upper() + endpoint + body
         signature = base64.b64encode(
             hmac.new(self.api_secret.encode(), str_to_sign.encode(), hashlib.sha256).digest()
@@ -74,7 +74,9 @@ class KuCoinClient:
             print(f"[ERROR] 初始化 symbol 限制缓存失败: {e}")
 
     def get_symbol_limits(self, symbol):
-        return self.symbol_limits_cache.get(to_symbol_pair(symbol), None)
+        # 总是自动补齐
+        sym = to_symbol_pair(symbol)
+        return self.symbol_limits_cache.get(sym, None)
 
     def get_all_tickers(self):
         url = self.base_url + "/api/v1/market/allTickers"
@@ -92,7 +94,7 @@ class KuCoinClient:
                     }
                 return tickers
             except Exception as e:
-                log_error(f"获取全市场ticker失败: {e}")
+                print(f"[ERROR] 获取全市场ticker失败: {e}")
                 time.sleep(2)
         return {}
 
@@ -118,8 +120,9 @@ class KuCoinClient:
             return {}
 
     def get_symbol_price(self, symbol):
+        sym = to_symbol_pair(symbol)
         url = f"{self.base_url}/api/v1/market/orderbook/level1"
-        params = {"symbol": to_symbol_pair(symbol)}
+        params = {"symbol": sym}
         try:
             response = requests.get(url, params=params)
             response.raise_for_status()
@@ -127,7 +130,7 @@ class KuCoinClient:
             if data and data.get("data") and data["data"].get("price"):
                 return safe_float(data["data"]["price"])
             else:
-                print(f"[WARN] 无法获取 {symbol} 最新价，API返回：{data}")
+                print(f"[WARN] 无法获取 {sym} 最新价，API返回：{data}")
                 return None
         except Exception as e:
             print(f"[ERROR] 获取价格失败 {symbol}: {e}")
@@ -142,7 +145,7 @@ class KuCoinClient:
                 data = resp.json()
                 candles = data.get("data", [])
                 if not candles or not isinstance(candles, list):
-                    log_error(f"K线数据为空: {symbol}")
+                    print(f"[ERROR] K线数据为空: {symbol}")
                     return None
                 import pandas as pd
                 df = pd.DataFrame(candles, columns=['t','o','c','h','l','v','turnover'])
@@ -156,11 +159,10 @@ class KuCoinClient:
                 df['volume'] = df['v']
                 return df
             except Exception as e:
-                log_error(f"K线获取失败 {symbol}: {e}")
+                print(f"[ERROR] K线获取失败 {symbol}: {e}")
                 time.sleep(2)
         return None
 
-    ### 账户资产——返回所有币资产，币名:数量（主流量化结构）
     def get_account_holdings(self):
         endpoint = "/api/v1/accounts"
         url = self.base_url + endpoint
@@ -174,32 +176,32 @@ class KuCoinClient:
                 acc_type = acc.get("type", "")
                 available = acc.get("available") or acc.get("balance") or 0
                 balance = safe_float(available)
+                print(f"[DEBUG] type={acc_type}, currency={currency}, available={available}")
                 if balance > 0:
                     balances[currency] = balances.get(currency, 0) + balance
-            return balances  # { "BTC": 0.18, "USDT": 993.2, ... }
+            return balances
         except Exception as e:
             print(f"[ERROR] 获取账户持仓失败: {e}")
             return {}
 
-    def get_balances(self, simulate=False):
-        """
-        获取账户全部币种资产，主流量化结构
-        """
-        if self.simulate or simulate:
+    def get_balances(self, simulate=None):
+        # 自动切换模拟盘或实盘
+        sim = self.simulate if simulate is None else simulate
+        if sim:
             return {"USDT": CONFIG.get("SIM_START_BALANCE", 1000)}
         return self.get_account_holdings()
 
-    ### 真实多币持仓（币-数量），主流量化兼容
-    def get_positions(self, simulate=False):
-        if self.simulate or simulate:
-            return {}  # 你可以自定义模拟盘结构
+    def get_positions(self, simulate=None):
+        sim = self.simulate if simulate is None else simulate
+        if sim:
+            return {}
         balances = self.get_account_holdings()
         positions = {}
         for coin, amount in balances.items():
             # 只保留主流币，过滤USDT类
             if coin not in ["USDT", "USD", "USDC", "DAI"] and amount > 0:
                 positions[f"{coin}-USDT"] = {"amount": amount}
-        return positions  # 如 { "BTC-USDT": {"amount": 0.18}, ... }
+        return positions
 
     def place_order(self, side, symbol, size, price=None):
         symbol_pair = to_symbol_pair(symbol)
