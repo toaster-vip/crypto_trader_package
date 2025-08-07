@@ -23,9 +23,10 @@ def to_symbol_pair(symbol):
 
 class KuCoinClient:
     def __init__(self):
-        self.api_key = CONFIG["KUCOIN_API_KEY"]
-        self.api_secret = CONFIG["KUCOIN_API_SECRET"]
-        self.passphrase = CONFIG["KUCOIN_API_PASSPHRASE"]
+        # 支持从环境/本地/硬编码加载
+        self.api_key = CONFIG.get("KUCOIN_API_KEY")
+        self.api_secret = CONFIG.get("KUCOIN_API_SECRET")
+        self.passphrase = CONFIG.get("KUCOIN_API_PASSPHRASE")
         self.base_url = "https://api.kucoin.com"
         self.simulate = CONFIG.get("DRY_RUN", False) or CONFIG.get("SIMULATE", False)
         self.symbol_limits_cache = {}
@@ -36,6 +37,8 @@ class KuCoinClient:
 
     def _get_headers(self, method, endpoint, body=""):
         now = str(int(time.time() * 1000))
+        if body is None:
+            body = ""
         str_to_sign = now + method.upper() + endpoint + body
         signature = base64.b64encode(
             hmac.new(self.api_secret.encode(), str_to_sign.encode(), hashlib.sha256).digest()
@@ -160,14 +163,18 @@ class KuCoinClient:
                 time.sleep(2)
         return None
 
-    # ======= 新增：获取历史成交明细（买入单） =======
+    # ============ 关键：币币/现货成交明细接口（必须加 tradeType=TRADE） ============
     def get_fills(self, symbol, side=None, limit=50):
         """
-        拉取最近的真实成交明细，用于回填成本价。
+        拉取最近的币币（现货）成交明细。
         """
         endpoint = "/api/v1/fills"
         url = self.base_url + endpoint
-        params = {"symbol": to_symbol_pair(symbol), "limit": limit}
+        params = {
+            "symbol": to_symbol_pair(symbol),
+            "tradeType": "TRADE",    # 必须！表示币币/现货
+            "pageSize": limit
+        }
         if side:
             params["side"] = side
         headers = self._get_headers("GET", endpoint)
@@ -197,7 +204,6 @@ class KuCoinClient:
             balances = {}
             for acc in data.get("data", []):
                 currency = acc["currency"]
-                acc_type = acc.get("type", "")
                 available = acc.get("available") or acc.get("balance") or 0
                 balance = safe_float(available)
                 if balance > 0:
