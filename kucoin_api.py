@@ -164,28 +164,27 @@ class KuCoinClient:
         return None
 
     def get_fills(self, symbol, side=None, limit=50):
-        """
-        拉取最近的币币（现货）成交明细。官方要求 tradeType="TRADE" 且分页参数为 pageSize。
-        """
         endpoint = "/api/v1/fills"
         url = self.base_url + endpoint
         params = {
             "symbol": to_symbol_pair(symbol),
-            "tradeType": "TRADE",    # 必须！表示币币/现货
-            "pageSize": limit        # 必须是 pageSize！
+            "tradeType": "TRADE",
+            "pageSize": limit
         }
         if side:
-            params["side"] = side    # "buy" 或 "sell"
-        # 关键：GET必须显式body=""
+            params["side"] = side
+        # Debug: 打印签名字符串和 headers
         headers = self._get_headers("GET", endpoint, body="")
+        print(f"[DEBUG] headers: {headers}")
+        print(f"[DEBUG] params: {params}")
         try:
             response = requests.get(url, headers=headers, params=params, timeout=10)
+            print(f"[DEBUG] url: {response.url}")
             data = response.json()
+            print(f"[DEBUG] fills API response: {data}")
             if data.get("code") == "200000":
                 fills = data.get("data", {}).get("items", [])
                 log_info(f"[get_fills] {symbol} 返回 {len(fills)} 条成交记录")
-                if len(fills) == 0:
-                    log_info(f"[get_fills] API原始返回: {data}")
                 return fills
             else:
                 log_info(f"[get_fills] 失败: {data}")
