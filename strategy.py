@@ -3,15 +3,17 @@ import pandas as pd
 from config import CONFIG
 from log_utils import log_debug
 
-def get_top_gainers_and_volume(api, top_n=30):
+def get_top_gainers_and_volume(api, top_n=30, exclude_symbols=None):
     """
     :param api: 统一传入已初始化的交易所接口实例（如 KuCoinClient）
+    :param exclude_symbols: set，可选，需过滤的币对（如冷却池/黑名单）
     :return: USDT 热门候选币列表
     """
     all_tickers = api.get_all_tickers()  # {symbol: {"changeRate":xx, "volValue":xx, ...}}
     if not all_tickers:
         log_debug("未获取到任何行情，热点榜为空！")
         return []
+    exclude_symbols = set(exclude_symbols or [])
     # 排序，取涨幅和成交量前N
     sorted_gainers = sorted(all_tickers.items(), key=lambda x: float(x[1]['changeRate']), reverse=True)
     gainers_24h = [s for s, v in sorted_gainers[:top_n] if s.endswith('USDT')]
@@ -21,8 +23,10 @@ def get_top_gainers_and_volume(api, top_n=30):
     candidates = list(set(gainers_24h) & set(vol_top))
     if len(candidates) < top_n // 2:
         candidates = list(set(gainers_24h + vol_top))[:top_n]
-    log_debug(f"热点候选池: {candidates}")
-    return candidates
+    # 冷却/黑名单剔除
+    filtered = [s for s in candidates if s not in exclude_symbols]
+    log_debug(f"热点候选池: {filtered}")
+    return filtered
 
 def get_klines(api, symbol, interval='1hour', limit=100):
     """
