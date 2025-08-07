@@ -200,15 +200,13 @@ class KuCoinClient:
         try:
             response = requests.get(url, headers=headers)
             data = response.json()
-            # Debug：先输出原始账户数据，查类型
-            # print("【DEBUG账户原始数据】", json.dumps(data, indent=2, ensure_ascii=False))
             balances = {}
             for acc in data.get("data", []):
                 currency = acc["currency"]
                 balance = safe_float(acc.get("available") or acc.get("balance") or 0)
                 acct_type = acc.get("type", "").lower()
-                # 只累计主账户和交易账户资金
-                if balance > 0 and acct_type in ["main", "trade", "margin"]:
+                # 主账户(main) + 交易账户(trade) 一起统计
+                if balance > 0 and acct_type in ["main", "trade"]:
                     balances[currency] = balances.get(currency, 0) + balance
             return balances
         except Exception as e:
