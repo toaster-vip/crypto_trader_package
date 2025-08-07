@@ -1,5 +1,5 @@
 import time
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from config import CONFIG
 from log_utils import log_info, log_trade_detail
 from kucoin_api import to_symbol_pair
@@ -7,7 +7,6 @@ from kucoin_api import to_symbol_pair
 # 工具函数
 def get_entry_price(pos):
     if isinstance(pos, dict):
-        # 允许默认模拟持仓不带entry_price字段
         return Decimal(str(pos.get("entry_price", 0)))
     return Decimal("0")
 
@@ -24,7 +23,8 @@ MIN_BUY_AMOUNT = Decimal(str(CONFIG["MIN_BUY_AMOUNT"]))
 
 def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None, dry_run=False, api=None):
     """
-    调仓逻辑（兼容多币种/主流量化风格）。api为必传：唯一KuCoinClient实例（全局只初始化一次）。
+    调仓逻辑（兼容多币种/主流量化风格）。
+    :param api: 必传唯一 KuCoinClient 实例（主控层全局只初始化一次）
     """
     if api is None:
         raise ValueError("必须传入唯一的 KuCoinClient api 实例！（主控请用 rebalance_portfolio(..., api=api)）")
@@ -37,7 +37,7 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
     total_asset = usdt + sum(get_entry_price(pos) * get_amount(pos) for pos in cur_hold.values())
     per_pos = min(total_asset * MAX_POSITION_RATIO, usdt / max(1, len(top_syms_pair))) if top_syms_pair else Decimal("0")
 
-    # 1. 卖出/止盈止损/非热点处理
+    # ========== 1. 卖出所有应平仓币 ==========
     for symbol, pos in cur_hold.items():
         entry = get_entry_price(pos)
         amount = get_amount(pos)
@@ -83,20 +83,27 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
         else:
             log_info(f"[持有] {symbol} 正常持有")
 
-    # 2. 新热点买入（步进修正，兼容主流所资金最小单位）
+    # ========== 2. 卖出后刷新usdt余额（实盘/模拟自动切换） ==========
+    if not dry_run:
+        # 注意：如有并发或其它进程下单，建议加重试
+        balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
+        usdt = Decimal(str(balances.get("USDT", 0)))
+
+    # ========== 3. 新热点买入（按步进修正，确保主流所合规） ==========
     for symbol in top_syms_pair:
         if symbol not in hold_syms and per_pos >= MIN_BUY_AMOUNT and usdt >= per_pos:
-            # 步进修正
+            # 步进修正（decimal更精确，确保不会increment invalid）
             limits = api.get_symbol_limits(symbol)
-            funds_increment = limits.get("minFunds", 0.01) if limits else 0.01
-            rounded_amt = (float(per_pos) // funds_increment) * funds_increment
+            funds_increment = Decimal(str(limits.get("minFunds", 0.01))) if limits else Decimal("0.01")
+            rounded_amt = (per_pos // funds_increment) * funds_increment
+            rounded_amt = rounded_amt.quantize(funds_increment, rounding=ROUND_DOWN)
             if rounded_amt < funds_increment:
                 log_info(f"[跳过] {symbol} 可买金额不足步进要求（minFunds={funds_increment}），跳过！")
                 continue
-            log_info(f"[买入] {symbol} 买入金额: {rounded_amt:.2f}")
+            log_info(f"[买入] {symbol} 买入金额: {rounded_amt:.8f}")
             if not dry_run:
-                place_order('buy', symbol, rounded_amt)
-            usdt -= Decimal(str(rounded_amt))
+                place_order('buy', symbol, float(rounded_amt))
+            usdt -= rounded_amt
             if price_map and symbol in price_map:
                 buy_price = float(price_map[symbol])
             else:
