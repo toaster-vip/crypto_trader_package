@@ -20,11 +20,41 @@ def save_entry_price_state(state):
     with open(ENTRY_PRICE_FILE, "w") as f:
         json.dump(state, f)
 
-def get_dynamic_entry_price(symbol, pos, entry_price_state):
+def calc_weighted_avg_entry_price(api, symbol, amount_min=1e-6):
+    """从API获取最近买入成交明细，按加权均价计算成本，忽略微小误差"""
+    fills = api.get_fills(symbol, side="buy", limit=100)
+    total_amt = 0
+    total_cost = 0
+    for f in fills:
+        try:
+            sz = float(f.get("size", 0))
+            px = float(f.get("price", 0))
+            if sz > amount_min and px > 0:
+                total_amt += sz
+                total_cost += sz * px
+        except Exception:
+            continue
+    if total_amt > 0:
+        return Decimal(str(total_cost / total_amt))
+    return Decimal("0")
+
+def get_dynamic_entry_price(symbol, pos, entry_price_state, api=None):
     sym = to_symbol_pair(symbol)
-    if sym in entry_price_state:
-        return Decimal(str(entry_price_state[sym]))
-    return Decimal(str(pos.get("entry_price", 0)))
+    # 优先本地 entry_price_state
+    entry_price = entry_price_state.get(sym)
+    if entry_price is not None and float(entry_price) > 0:
+        return Decimal(str(entry_price))
+    # 若本地无有效 entry_price，尝试读取 pos 里的（兼容模拟/老数据）
+    pos_entry = pos.get("entry_price", 0)
+    if float(pos_entry) > 0:
+        return Decimal(str(pos_entry))
+    # 若依然为0且api可用，实时补拉成交明细，计算加权成本
+    if api is not None:
+        weighted = calc_weighted_avg_entry_price(api, sym)
+        if weighted > 0:
+            log_info(f"[entry_price] {sym} 本地/持仓为0，已自动回填加权均价: {weighted}")
+            return weighted
+    return Decimal("0")
 
 # ====== 其余参数 ======
 TAKE_PROFIT = Decimal(str(CONFIG["TAKE_PROFIT"]))
@@ -45,7 +75,7 @@ def rebalance_portfolio(
     cooldown_pool=None, current_round=None, cooldown_rounds=COOLDOWN_ROUNDS
 ):
     """
-    主调仓函数：支持冷却池和动态entry price，集成调试日志
+    主调仓函数：支持冷却池和动态entry price（自动加权修复），集成调试日志
     """
     if api is None:
         raise ValueError("必须传入唯一的 KuCoinClient api 实例！（主控请用 rebalance_portfolio(..., api=api)）")
@@ -61,14 +91,14 @@ def rebalance_portfolio(
     cur_hold = {to_symbol_pair(k): v for k, v in positions.items() if get_amount(v) > 0}
     hold_syms = set(cur_hold.keys())
     top_syms_pair = [to_symbol_pair(s) for s in top_symbols]
-    total_asset = usdt + sum(get_dynamic_entry_price(k, v, entry_price_state) * get_amount(v) for k, v in cur_hold.items())
+    total_asset = usdt + sum(get_dynamic_entry_price(k, v, entry_price_state, api=api) * get_amount(v) for k, v in cur_hold.items())
     per_pos = min(total_asset * MAX_POSITION_RATIO, usdt / max(1, len(top_syms_pair))) if top_syms_pair else Decimal("0")
 
     # ========== 1. 卖出/动态止盈 ==========
     for symbol, pos in cur_hold.items():
         sym = to_symbol_pair(symbol)
         amount = get_amount(pos)
-        entry = get_dynamic_entry_price(sym, pos, entry_price_state)
+        entry = get_dynamic_entry_price(sym, pos, entry_price_state, api=api)
         # 取最新价
         if price_map and sym in price_map:
             cur_price_raw = price_map[sym]
@@ -78,7 +108,7 @@ def rebalance_portfolio(
             log_info(f"[跳过] {sym} 无法获取当前价格，自动跳过卖出/持有决策！")
             continue
         cur_price = Decimal(str(cur_price_raw))
-        pnl = (cur_price - entry) / (entry + Decimal('1e-8'))
+        pnl = (cur_price - entry) / (entry + Decimal('1e-8')) if entry > 0 else Decimal("0")
 
         # ---- 止损，强制卖出并冷却，清理entry price
         if pnl <= STOP_LOSS:
