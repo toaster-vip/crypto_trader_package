@@ -21,13 +21,27 @@ TRAILING_STOP_PCT = Decimal(str(CONFIG["TRAILING_STOP_PCT"]))
 MAX_POSITION_RATIO = Decimal(str(CONFIG["MAX_POSITION_RATIO"]))
 MIN_BUY_AMOUNT = Decimal(str(CONFIG["MIN_BUY_AMOUNT"]))
 
-def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None, dry_run=False, api=None):
+# 推荐冷却期设置
+COOLDOWN_ROUNDS = CONFIG.get("COOLDOWN_ROUNDS", 3)  # 冷却3轮（比如每4小时为1轮）
+
+def rebalance_portfolio(
+    top_symbols, balances, positions, place_order,
+    price_map=None, dry_run=False, api=None,
+    cooldown_pool=None, current_round=None, cooldown_rounds=COOLDOWN_ROUNDS
+):
     """
-    调仓逻辑（兼容多币种/主流量化风格）。
-    :param api: 必传唯一 KuCoinClient 实例（主控层全局只初始化一次）
+    调仓逻辑（主流量化风格），集成冷却机制
+    :param cooldown_pool: dict, 记录symbol -> 解禁轮次
+    :param current_round: int, 当前轮次编号（主控建议每4小时一个轮次，可自定义）
+    :param cooldown_rounds: int, 止盈/止损后冷却多少轮
     """
     if api is None:
         raise ValueError("必须传入唯一的 KuCoinClient api 实例！（主控请用 rebalance_portfolio(..., api=api)）")
+    if cooldown_pool is None:  # 默认空dict
+        cooldown_pool = {}
+    if current_round is None:
+        # 若未传，则以小时为单位（默认每4小时为一轮），建议主控传入
+        current_round = int(time.time() // (3600 * 4))
 
     log_info(f"== 调仓轮 == Top池: {top_symbols}")
     usdt = Decimal(str(balances.get("USDT", 0)))
@@ -65,7 +79,10 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             log_trade_detail(trade)
             if not dry_run:
                 place_order('sell', symbol, float(amount))
-            log_info(f"[平仓] {symbol} 触发止盈止损")
+                # 【卖出成功后，加入冷却池，当前轮+N轮】
+                if cooldown_pool is not None and current_round is not None:
+                    cooldown_pool[symbol] = current_round + cooldown_rounds
+            log_info(f"[平仓] {symbol} 触发止盈止损，进入冷却{cooldown_rounds}轮")
         elif symbol not in top_syms_pair:
             log_info(f"[续持] {symbol} 非热点但未触发止盈止损，留仓")
         elif pnl >= TAKE_PROFIT:
@@ -73,26 +90,34 @@ def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map
             log_trade_detail(trade)
             if not dry_run:
                 place_order('sell', symbol, float(amount))
-            log_info(f"[止盈] {symbol} 达到止盈")
+                if cooldown_pool is not None and current_round is not None:
+                    cooldown_pool[symbol] = current_round + cooldown_rounds
+            log_info(f"[止盈] {symbol} 达到止盈，进入冷却{cooldown_rounds}轮")
         elif pnl <= STOP_LOSS:
             trade["reason"] = "STOP_LOSS"
             log_trade_detail(trade)
             if not dry_run:
                 place_order('sell', symbol, float(amount))
-            log_info(f"[止损] {symbol} 触发止损")
+                if cooldown_pool is not None and current_round is not None:
+                    cooldown_pool[symbol] = current_round + cooldown_rounds
+            log_info(f"[止损] {symbol} 触发止损，进入冷却{cooldown_rounds}轮")
         else:
             log_info(f"[持有] {symbol} 正常持有")
 
-    # ========== 2. 卖出后刷新usdt余额（实盘/模拟自动切换） ==========
+    # ========== 2. 卖出后刷新usdt余额 ==========
     if not dry_run:
-        # 注意：如有并发或其它进程下单，建议加重试
         balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
         usdt = Decimal(str(balances.get("USDT", 0)))
 
-    # ========== 3. 新热点买入（按步进修正，确保主流所合规） ==========
+    # ========== 3. 新热点买入 ==========
     for symbol in top_syms_pair:
+        # 【买入前判断是否在冷却期】
+        if cooldown_pool and cooldown_pool.get(symbol, 0) > current_round:
+            log_info(f"[冷却中] {symbol} 在冷却期，跳过买入。")
+            continue
+
         if symbol not in hold_syms and per_pos >= MIN_BUY_AMOUNT and usdt >= per_pos:
-            # 步进修正（decimal更精确，确保不会increment invalid）
+            # 步进修正
             limits = api.get_symbol_limits(symbol)
             funds_increment = Decimal(str(limits.get("minFunds", 0.01))) if limits else Decimal("0.01")
             rounded_amt = (per_pos // funds_increment) * funds_increment
