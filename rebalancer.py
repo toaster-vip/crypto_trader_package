@@ -110,6 +110,18 @@ def rebalance_portfolio(
         cur_price = Decimal(str(cur_price_raw))
         pnl = (cur_price - entry) / (entry + Decimal('1e-8')) if entry > 0 else Decimal("0")
 
+        # ===== 临时修正：entry为0强平卖出 =====
+        if entry == 0:
+            log_info(f"[临时修正] {sym} 由于买入价为0，直接强平卖出！")
+            if not dry_run:
+                place_order('sell', sym, float(amount))
+                if cooldown_pool is not None:
+                    cooldown_pool[sym] = current_round + cooldown_rounds
+                if sym in entry_price_state:
+                    entry_price_state.pop(sym)
+            continue
+        # ========
+
         # ---- 止损，强制卖出并冷却，清理entry price
         if pnl <= STOP_LOSS:
             trade = {
