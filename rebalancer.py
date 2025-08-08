@@ -1,290 +1,137 @@
 import time
+import json
+import os
 from decimal import Decimal, ROUND_DOWN
-from config import CONFIG, TRADE
-from notifier import send_serverchan_notification
-from kucoin_api import KuCoinClient
-from trade_logger import log_trade, log_rebalance
-from log_utils import log_snapshot, log_trade_detail  # 集成日志
+from config import CONFIG
+from log_utils import log_info, log_debug, log_trade_detail
+from kucoin_api import to_symbol_pair
 
-_blacklist = set()
-_symbol_buy_cooldown = {}
+ENTRY_PRICE_FILE = CONFIG.get("ENTRY_PRICE_FILE", "entry_price_state.json")
+COOLDOWN_FILE = CONFIG.get("COOLDOWN_FILE", "cooldown_pool.json")
 
-TAKE_PROFIT = Decimal(str(TRADE["TAKE_PROFIT"]))
-STOP_LOSS = Decimal(str(TRADE["STOP_LOSS"]))
-MAX_ALLOC_PER_SYMBOL = Decimal(str(CONFIG.get("MAX_POSITION_RATIO", 0.10)))
-COOLDOWN_AFTER_LOSS = int(CONFIG.get("COOLDOWN_AFTER_LOSS", 3))
-USDT_STEP = Decimal(str(CONFIG.get("USDT_STEP", 0.01)))
-TRAILING_STOP_PCT = Decimal(str(CONFIG.get("TRAILING_STOP_PCT", 0.03)))
-MIN_BUY_AMOUNT = Decimal(str(CONFIG.get("MIN_BUY_AMOUNT", 5)))
-DRY_RUN = CONFIG.get("DRY_RUN", False)
+def load_json_file(filepath, default=None):
+    if os.path.exists(filepath):
+        with open(filepath, "r") as f:
+            return json.load(f)
+    return default or {}
 
-def to_symbol_pair(symbol):
-    if "-" in symbol:
-        return symbol
-    elif symbol in ["USDT", "USDC", "USDD", "DAI", "BTC", "ETH"]:
-        return symbol
-    else:
-        return symbol + "-USDT"
-
-def get_price_with_map(symbol, price_map, api_client):
-    if price_map and symbol in price_map and price_map[symbol] is not None:
-        return Decimal(str(price_map[symbol]))
-    try:
-        price = api_client.get_symbol_price(symbol)
-        if price:
-            return Decimal(str(price))
-    except Exception as e:
-        print(f"[错误] 获取{symbol}实时价格失败：{e}")
-    return None
+def save_json_file(filepath, data):
+    with open(filepath, "w") as f:
+        json.dump(data, f)
 
 def get_amount(pos):
-    if isinstance(pos, dict):
-        return Decimal(str(pos.get("amount", 0)))
-    elif isinstance(pos, (int, float, Decimal)):
-        return Decimal(str(pos))
+    return Decimal(str(pos.get("amount", 0))) if isinstance(pos, dict) else Decimal("0")
+
+def get_entry_price(symbol, pos, entry_price_state, api):
+    sym = to_symbol_pair(symbol)
+    entry = entry_price_state.get(sym)
+    if entry and float(entry) > 0:
+        return Decimal(str(entry))
+    # 尝试通过持仓或成交填充
+    fills = api.get_fills(sym, side="buy")
+    total_amt = sum(float(f.get("size", 0)) for f in fills if float(f.get("size", 0)) > 0)
+    total_cost = sum(float(f.get("size", 0)) * float(f.get("price", 0)) for f in fills)
+    if total_amt > 0:
+        return Decimal(str(total_cost / total_amt))
     return Decimal("0")
 
-def get_entry_price(pos):
-    if isinstance(pos, dict):
-        return Decimal(str(pos.get("entry_price", 0)))
-    return Decimal("0")
+def rebalance_portfolio(
+    top_symbols,
+    balances,
+    positions,
+    place_order,
+    price_map,
+    dry_run=False,
+    api=None,
+    cooldown_pool=None,
+    current_round=None,
+    cooldown_rounds=None
+):
+    assert api is not None, "必须传入 api"
+    entry_price_state = load_json_file(ENTRY_PRICE_FILE, {})
+    cooldown_pool = cooldown_pool or load_json_file(COOLDOWN_FILE, {})
+    current_round = current_round or int(time.time() // (3600 * 4))
+    cooldown_rounds = cooldown_rounds or CONFIG.get("COOLDOWN_ROUNDS", 3)
 
-def rebalance_portfolio(top_symbols, balances, positions, place_order, price_map=None):
-    print("\n🔁 [调仓] 开始执行智能调仓逻辑")
-    api = KuCoinClient()
-    is_simulate = CONFIG.get("SIMULATE", True)
-    raw_usdt = Decimal(str(balances.get("USDT", 0)))
-    usdt_total = Decimal(str(CONFIG.get("SIM_START_BALANCE", 100))) if is_simulate else raw_usdt
-    usdt_avail = raw_usdt
+    MAX_RATIO = Decimal(str(CONFIG["MAX_POSITION_RATIO"]))
+    TAKE_PROFIT = Decimal(str(CONFIG["TAKE_PROFIT"]))
+    STOP_LOSS = Decimal(str(CONFIG["STOP_LOSS"]))
+    MIN_BUY = Decimal(str(CONFIG["MIN_BUY_AMOUNT"]))
 
-    # 资产快照：调仓前
-    log_snapshot(balances, price_map, tag="before")
+    all_prices = api.get_all_prices()
+    top_syms = [to_symbol_pair(s) for s in top_symbols]
 
-    positions = {k: v for k, v in positions.items() if get_amount(v) > 0}
+    usdt = Decimal(str(balances.get("USDT", 0)))
+    hold_syms = {to_symbol_pair(s): v for s, v in positions.items()}
+    total_value = usdt + sum(
+        get_amount(pos) * Decimal(str(all_prices.get(sym, 0))) for sym, pos in hold_syms.items()
+    )
+    per_alloc = total_value * MAX_RATIO if total_value > 0 else Decimal("0")
 
-    print("🪙 当前持仓市值与成本：")
-    hold_total_cost, hold_total_value = Decimal("0"), Decimal("0")
-    for symbol, pos in positions.items():
-        amount = get_amount(pos)
-        entry = get_entry_price(pos)
-        cost = entry * amount
-        cur_price = get_price_with_map(to_symbol_pair(symbol), price_map, api)
-        if not cur_price or cur_price <= 0:
-            cur_price = entry
-        value = cur_price * amount
-        pnl_pct = ((value - cost) / cost * 100) if cost > 0 else Decimal("0")
-        print(f" - {symbol:>12}: 持仓 {amount:.4f}，买入成本 {cost:.2f}，现价市值 {value:.2f}，盈亏 {pnl_pct:.2f}%")
-        hold_total_cost += cost
-        hold_total_value += value
-    print(f"📊 持仓总成本: {hold_total_cost:.2f}，现价总市值: {hold_total_value:.2f}，盈亏 {((hold_total_value-hold_total_cost)/hold_total_cost*100) if hold_total_cost else 0:.2f}%\n")
+    log_info(f"\n✅ 本轮 TopN: {top_syms}")
+    log_info(f"💰 当前 USDT: {usdt:.4f}，最大单币投入: {per_alloc:.4f}")
 
-    sell_list = []
-    now = time.strftime('%Y-%m-%d %H:%M:%S')
-
-    # === 卖出逻辑 ===
-    for symbol, pos in positions.items():
-        try:
-            amount = get_amount(pos)
-            base_price = Decimal(str(pos.get("base_price", pos.get("entry_price", "0")))) if isinstance(pos, dict) else get_entry_price(pos)
-            max_price = Decimal(str(pos.get("max_price", base_price))) if isinstance(pos, dict) else base_price
-        except Exception as e:
-            print(f"[异常] 解析持仓数据失败 {symbol}: {e}")
+    # ========== Step 1. 卖出 ==========
+    sold = 0
+    for sym, pos in hold_syms.items():
+        if sym not in all_prices:
+            log_info(f"[跳过] {sym} 无法获取价格")
             continue
+        cur_price = Decimal(str(all_prices[sym]))
+        entry = get_entry_price(sym, pos, entry_price_state, api)
+        pnl = (cur_price - entry) / (entry + Decimal("1e-8")) if entry > 0 else Decimal("0")
+        amt = get_amount(pos)
 
-        current_price = get_price_with_map(to_symbol_pair(symbol), price_map, api)
-        if base_price <= 0 or current_price is None or current_price <= 0:
-            continue
+        # 止盈止损逻辑
+        reason = None
+        if pnl <= STOP_LOSS:
+            reason = "止损"
+        elif pnl >= TAKE_PROFIT and sym not in top_syms:
+            reason = "止盈"
 
-        if current_price > max_price:
-            max_price = current_price
-            base_price = max_price
-            if isinstance(pos, dict):
-                pos["base_price"] = str(base_price)
-                pos["max_price"] = str(max_price)
-
-        pnl_pct = (current_price - base_price) / base_price
-        trailing_stop_price = max_price * (Decimal("1") - TRAILING_STOP_PCT)
-        reason = ""
-
-        if pnl_pct >= TAKE_PROFIT:
-            print(f"✅ 止盈：卖出 {symbol} 盈利 +{pnl_pct:.2%}")
-            sell_list.append(symbol)
-            reason = "TAKE_PROFIT"
-        elif pnl_pct <= STOP_LOSS or current_price <= trailing_stop_price:
-            print(f"⛔ 止损：卖出 {symbol} 亏损 {pnl_pct:.2%}（当前价：{current_price}，移动止损价：{trailing_stop_price}）")
-            sell_list.append(symbol)
-            _symbol_buy_cooldown[symbol] = COOLDOWN_AFTER_LOSS
-            _blacklist.add(symbol)
-            reason = "STOP_LOSS"
-        elif symbol not in top_symbols:
-            print(f"📉 排名跌出Top：卖出 {symbol}")
-            sell_list.append(symbol)
-            reason = "DROPPED_TOP"
-
-        if symbol in sell_list:
-            # 拉一次余额，模拟手续费和滑点（可接入API真实成交信息！）
-            trade_detail = {
-                "类型": "sell",
-                "时间": now,
-                "币种": symbol,
-                "卖出数量": float(amount),
-                "理论卖出价格": float(base_price),
-                "实际成交均价": float(current_price),
-                "滑点": float(current_price-base_price),
-                "手续费": 0,   # 实盘可从api返回获取
-                "卖出到账": float(amount * current_price),
-                "盈亏": float((current_price-base_price) * amount)
-            }
-            log_trade_detail(trade_detail)
-            log_trade({
-                "timestamp": now,
-                "type": "sell",
-                "symbol": symbol,
-                "amount": float(amount),
-                "base_price": float(base_price),
-                "current_price": float(current_price or 0),
-                "pnl_pct": float(pnl_pct),
-                "reason": reason
-            })
-
-    # === 执行卖出 ===
-    for symbol in sell_list:
-        pos = positions.get(symbol)
-        if not pos:
-            continue
-        if DRY_RUN:
-            print(f"[DRY_RUN] Would SELL {symbol} amount={get_amount(pos)}")
-            result = {"side": "sell", "symbol": symbol, "amount": get_amount(pos), "dry_run": True}
+        if reason:
+            log_info(f"[{reason}] {sym} | 价格: {cur_price:.4f} | 盈亏: {pnl:.2%}")
+            if not dry_run:
+                place_order("sell", sym, float(amt))
+                cooldown_pool[sym] = current_round + cooldown_rounds
+                entry_price_state.pop(sym, None)
+            sold += 1
         else:
-            result = place_order("sell", to_symbol_pair(symbol), float(get_amount(pos)), None, now_time=now)
-        if result:
-            print(f"[调仓] ✅ 卖出 {symbol} 成功")
-        else:
-            print(f"[调仓] ❌ 卖出 {symbol} 失败")
+            log_info(f"[持仓] {sym} | 价格: {cur_price:.4f} | 盈亏: {pnl:.2%} | 状态: 持有")
 
-    if not is_simulate and not DRY_RUN and sell_list:
-        time.sleep(2)
-        balances = api.get_account_holdings()
-        usdt_avail = Decimal(str(balances.get("USDT", 0)))
-
-    print("\n[调仓] 卖出后账户快照：")
-    print(f"  - 可用USDT: {usdt_avail:.2f}")
-    for symbol in sell_list:
-        positions.pop(symbol, None)
-
-    hold_total_value = Decimal("0")
-    for symbol, pos in positions.items():
-        cur_price = get_price_with_map(to_symbol_pair(symbol), price_map, api)
-        if not cur_price or cur_price <= 0:
-            cur_price = get_entry_price(pos)
-        hold_total_value += cur_price * get_amount(pos)
-    print(f"  - 持仓币种市值合计: {hold_total_value:.2f}\n")
-
-    # 调仓后快照
-    log_snapshot(balances, price_map, tag="after")
-
-    if usdt_avail <= MIN_BUY_AMOUNT:
-        print(f"[调仓] 💰 USDT 余额不足（{usdt_avail}），停止买入")
-        return
-
-    max_alloc = (usdt_total * MAX_ALLOC_PER_SYMBOL).quantize(USDT_STEP, rounding=ROUND_DOWN)
-    buy_count = 0
-
-    # === 买入逻辑 ===
-    for symbol in top_symbols:
-        if symbol in positions:
-            print(f"[调仓] 🟡 已持有 {symbol}，跳过")
+    # ========== Step 2. 买入 ==========
+    bought = 0
+    for sym in top_syms:
+        if cooldown_pool.get(sym, 0) > current_round:
+            log_info(f"[冷却] {sym} 跳过")
             continue
-        if symbol in _blacklist:
-            print(f"[调仓] ⛔ 黑名单跳过 {symbol}")
-            continue
-        if _symbol_buy_cooldown.get(symbol, 0) > 0:
-            print(f"[调仓] ⏳ 冷却中跳过 {symbol}")
+        if sym in hold_syms:
+            log_info(f"[跳过] {sym} 已持有")
             continue
 
-        buy_amount = min(usdt_avail, max_alloc).quantize(USDT_STEP, rounding=ROUND_DOWN)
-        if buy_amount < MIN_BUY_AMOUNT:
-            print(f"[调仓] ⚠️ 资金不足跳过 {symbol}")
+        price = Decimal(str(all_prices.get(sym, 0)))
+        limit = api.get_symbol_limits(sym)
+        min_fund = Decimal(str(limit.get("minFunds", 0.1))) if limit else Decimal("0.1")
+
+        amount = min(per_alloc, usdt)
+        if amount < min_fund:
+            log_info(f"[跳过] {sym} 资金不足（{amount:.4f} < min {min_fund}）")
             continue
 
-        cur_price = get_price_with_map(to_symbol_pair(symbol), price_map, api)
-        if DRY_RUN:
-            print(f"[DRY_RUN] Would BUY {symbol} amount={float(buy_amount)}")
-            result = {"side": "buy", "symbol": symbol, "amount": float(buy_amount), "dry_run": True}
-            positions[symbol] = {
-                "amount": float(buy_amount / (cur_price or Decimal("1"))),
-                "entry_price": float(cur_price or 0),
-                "last_update": now,
-                "base_price": str(cur_price or 0),
-                "max_price": str(cur_price or 0)
-            }
-        else:
-            result = place_order("buy", to_symbol_pair(symbol), float(buy_amount), None, now_time=now)
-            if result and cur_price:
-                positions[symbol] = {
-                    "amount": float(buy_amount / (cur_price or Decimal("1"))),
-                    "entry_price": float(cur_price or 0),
-                    "last_update": now,
-                    "base_price": str(cur_price or 0),
-                    "max_price": str(cur_price or 0)
-                }
+        log_info(f"[买入] {sym} 金额: {amount:.4f}")
+        if not dry_run:
+            place_order("buy", sym, float(amount))
+            entry_price = api.get_symbol_price(sym)
+            if entry_price:
+                entry_price_state[sym] = float(entry_price)
+        bought += 1
+        usdt -= amount
 
-        if result:
-            trade_detail = {
-                "类型": "buy",
-                "时间": now,
-                "币种": symbol,
-                "买入金额": float(buy_amount),
-                "理论买入价格": float(cur_price),
-                "实际成交均价": float(cur_price),  # 实盘可改成实际均价
-                "滑点": 0,
-                "手续费": 0,   # 实盘可接API
-                "买入到账": float(buy_amount),
-                "盈亏": 0  # 买入盈亏为0
-            }
-            log_trade_detail(trade_detail)
-            print(f"[调仓] ✅ 买入 {symbol} 成功，金额 {buy_amount}")
-            usdt_avail -= buy_amount
-            buy_count += 1
+    if sold == 0:
+        log_info("本轮未卖出")
+    if bought == 0:
+        log_info("本轮未买入")
 
-            log_trade({
-                "timestamp": now,
-                "type": "buy",
-                "symbol": symbol,
-                "amount": float(buy_amount),
-                "price": float(cur_price or 0),
-                "reason": "REBALANCE_BUY"
-            })
-        else:
-            print(f"[调仓] ❌ 买入 {symbol} 失败")
-
-        if usdt_avail < MIN_BUY_AMOUNT:
-            print(f"[调仓] 💸 余额耗尽，结束买入")
-            break
-
-    print("\n[调仓] 买入后账户快照：")
-    print(f"  - 可用USDT: {usdt_avail:.2f}")
-    print(f"  - 持仓币种市值合计: {hold_total_value:.2f}\n")
-
-    # 冷却期管理
-    for s in list(_symbol_buy_cooldown.keys()):
-        _symbol_buy_cooldown[s] -= 1
-        if _symbol_buy_cooldown[s] <= 0:
-            del _symbol_buy_cooldown[s]
-
-    log_rebalance({
-        "timestamp": now,
-        "top_symbols": top_symbols,
-        "buy_count": buy_count,
-        "sell_list": sell_list,
-        "hold_value": float(hold_total_value),
-        "usdt_avail": float(usdt_avail),
-    })
-
-    print(f"[调仓] ✅ 调仓结束，共买入 {buy_count} 个币种")
-
-def get_blacklist():
-    return _blacklist
-
-def is_symbol_in_cooldown(symbol):
-    return _symbol_buy_cooldown.get(symbol, 0) > 0
+    # ========== Step 3. 保存状态 ==========
+    save_json_file(ENTRY_PRICE_FILE, entry_price_state)
+    save_json_file(COOLDOWN_FILE, cooldown_pool)
