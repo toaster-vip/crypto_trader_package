@@ -1,10 +1,24 @@
+import requests
 import time
 import hmac
 import base64
 import hashlib
-import requests
 import json
 from config import CONFIG
+
+def safe_float(x, default=0.0):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return default
+
+def to_symbol_pair(symbol):
+    s = symbol.upper()
+    if "-" in s:
+        return s
+    if not s.endswith("USDT"):
+        return f"{s}-USDT"
+    return s
 
 class KuCoinClient:
     def __init__(self):
@@ -12,13 +26,16 @@ class KuCoinClient:
         self.api_secret = CONFIG["KUCOIN_API_SECRET"]
         self.passphrase = CONFIG["KUCOIN_API_PASSPHRASE"]
         self.base_url = "https://api.kucoin.com"
+        self.simulate = CONFIG.get("DRY_RUN", False) or CONFIG.get("SIMULATE", False)
         self.symbol_limits_cache = {}
-        print("🔑 [KuCoinClient] 使用的 KuCoin API KEY:", self.api_key)
+        print("🔑 [KuCoinClient] 使用 KuCoin API KEY:", self.api_key[:5] + "***")
         print("📁 [KuCoinClient] config.py 加载成功")
         self._init_symbol_limits_cache()
 
     def _get_headers(self, method, endpoint, body=""):
         now = str(int(time.time() * 1000))
+        if body is None:
+            body = ""
         str_to_sign = now + method.upper() + endpoint + body
         signature = base64.b64encode(
             hmac.new(self.api_secret.encode(), str_to_sign.encode(), hashlib.sha256).digest()
@@ -42,13 +59,13 @@ class KuCoinClient:
             response = requests.get(url)
             data = response.json()
             for item in data.get("data", []):
-                if item["enableTrading"]:
+                if item.get("enableTrading"):
                     try:
                         self.symbol_limits_cache[item["symbol"]] = {
-                            "minFunds": float(item.get("minFunds") or 0),
-                            "minSize": float(item.get("baseMinSize") or 0),
-                            "maxSize": float(item.get("baseMaxSize") or 1e10),
-                            "stepSize": float(item.get("baseIncrement") or 0.000001)
+                            "minFunds": safe_float(item.get("minFunds")),
+                            "minSize": safe_float(item.get("baseMinSize")),
+                            "maxSize": safe_float(item.get("baseMaxSize"), 1e10),
+                            "stepSize": safe_float(item.get("baseIncrement"), 0.000001)
                         }
                     except Exception as e:
                         print(f"[WARN] 忽略异常交易对 {item.get('symbol')}: {e}")
@@ -57,7 +74,94 @@ class KuCoinClient:
             print(f"[ERROR] 初始化 symbol 限制缓存失败: {e}")
 
     def get_symbol_limits(self, symbol):
-        return self.symbol_limits_cache.get(symbol, None)
+        # 总是自动补齐
+        sym = to_symbol_pair(symbol)
+        return self.symbol_limits_cache.get(sym, None)
+
+    def get_all_tickers(self):
+        url = self.base_url + "/api/v1/market/allTickers"
+        for retry in range(3):
+            try:
+                resp = requests.get(url, timeout=10)
+                data = resp.json()
+                tickers = {}
+                print("🔥 using safe_float for all tickers!")
+                for t in data.get("data", {}).get("ticker", []):
+                    tickers[t['symbol']] = {
+                        "changeRate": safe_float(t.get("changeRate")),
+                        "volValue": safe_float(t.get("volValue")),
+                        "last": safe_float(t.get("last")),
+                    }
+                return tickers
+            except Exception as e:
+                print(f"[ERROR] 获取全市场ticker失败: {e}")
+                time.sleep(2)
+        return {}
+
+    def get_all_prices(self):
+        tickers = self.get_all_tickers()
+        return {k: v["last"] for k, v in tickers.items()}
+
+    def get_market_data(self, symbol):
+        url = self.base_url + f"/api/v1/market/stats?symbol={to_symbol_pair(symbol)}"
+        try:
+            response = requests.get(url)
+            data = response.json()
+            ticker = data.get("data", {})
+            return {
+                "price": safe_float(ticker.get("last")),
+                "open": safe_float(ticker.get("open")),
+                "high": safe_float(ticker.get("high")),
+                "low": safe_float(ticker.get("low")),
+                "vol": safe_float(ticker.get("vol")),
+            }
+        except Exception as e:
+            print(f"[ERROR] 获取行情失败 {symbol}: {e}")
+            return {}
+
+    def get_symbol_price(self, symbol):
+        sym = to_symbol_pair(symbol)
+        url = f"{self.base_url}/api/v1/market/orderbook/level1"
+        params = {"symbol": sym}
+        try:
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            if data and data.get("data") and data["data"].get("price"):
+                return safe_float(data["data"]["price"])
+            else:
+                print(f"[WARN] 无法获取 {sym} 最新价，API返回：{data}")
+                return None
+        except Exception as e:
+            print(f"[ERROR] 获取价格失败 {symbol}: {e}")
+            return None
+
+    def get_klines(self, symbol, interval="1hour", limit=100):
+        url = self.base_url + "/api/v1/market/candles"
+        params = {"symbol": to_symbol_pair(symbol), "type": interval}
+        for retry in range(3):
+            try:
+                resp = requests.get(url, params=params, timeout=10)
+                data = resp.json()
+                candles = data.get("data", [])
+                if not candles or not isinstance(candles, list):
+                    print(f"[ERROR] K线数据为空: {symbol}")
+                    return None
+                import pandas as pd
+                df = pd.DataFrame(candles, columns=['t','o','c','h','l','v','turnover'])
+                df = df.sort_values(by='t')
+                for col in ['o', 'c', 'h', 'l', 'v', 'turnover']:
+                    df[col] = df[col].map(safe_float)
+                df['open'] = df['o']
+                df['close'] = df['c']
+                df['high'] = df['h']
+                df['low'] = df['l']
+                df['volume'] = df['v']
+                return df
+            except Exception as e:
+                print(f"[ERROR] K线获取失败 {symbol}: {e}")
+                time.sleep(2)
+        return None
 
     def get_account_holdings(self):
         endpoint = "/api/v1/accounts"
@@ -66,51 +170,52 @@ class KuCoinClient:
         try:
             response = requests.get(url, headers=headers)
             data = response.json()
+            # 不打印 data
             balances = {}
             for acc in data.get("data", []):
                 currency = acc["currency"]
                 acc_type = acc.get("type", "")
                 available = acc.get("available") or acc.get("balance") or 0
-                balance = float(available)
-                print(f"[DEBUG] type={acc_type}, currency={currency}, available={available}")
+                balance = safe_float(available)
                 if balance > 0:
                     balances[currency] = balances.get(currency, 0) + balance
+            # 不打印 balances
             return balances
         except Exception as e:
             print(f"[ERROR] 获取账户持仓失败: {e}")
             return {}
 
-    def get_supported_symbols(self):
-        return list(self.symbol_limits_cache.keys())
+    def get_balances(self, simulate=None):
+        # 自动切换模拟盘或实盘
+        sim = self.simulate if simulate is None else simulate
+        if sim:
+            return {"USDT": CONFIG.get("SIM_START_BALANCE", 1000)}
+        return self.get_account_holdings()
 
-    def get_market_data(self, symbol):
-        url = self.base_url + f"/api/v1/market/stats?symbol={symbol}"
-        try:
-            response = requests.get(url)
-            data = response.json()
-            ticker = data.get("data", {})
-            return {
-                "price": float(ticker.get("last", 0.0)),
-                "open": float(ticker.get("open", 0.0)),
-                "high": float(ticker.get("high", 0.0)),
-                "low": float(ticker.get("low", 0.0)),
-                "vol": float(ticker.get("vol", 0.0)),
-            }
-        except Exception as e:
-            print(f"[ERROR] 获取行情失败 {symbol}: {e}")
+    def get_positions(self, simulate=None):
+        sim = self.simulate if simulate is None else simulate
+        if sim:
             return {}
+        balances = self.get_account_holdings()
+        positions = {}
+        for coin, amount in balances.items():
+            # 只保留主流币，过滤USDT类
+            if coin not in ["USDT", "USD", "USDC", "DAI"] and amount > 0:
+                positions[f"{coin}-USDT"] = {"amount": amount}
+        return positions
 
-    def place_order(self, symbol, side, size, price=None):
+    def place_order(self, side, symbol, size, price=None):
+        symbol_pair = to_symbol_pair(symbol)
         if CONFIG.get("DRY_RUN", False):
-            print(f"[DRY_RUN] Would {side.upper()} {symbol} size={size} price={price if price else 'market'}")
-            return {"side": side, "symbol": symbol, "size": size, "price": price, "dry_run": True}
+            print(f"[DRY_RUN] Would {side.upper()} {symbol_pair} size={size} price={price if price else 'market'}")
+            return {"side": side, "symbol": symbol_pair, "size": size, "price": price, "dry_run": True}
         endpoint = "/api/v1/orders"
         url = self.base_url + endpoint
         order_type = "market" if price is None else "limit"
         body_dict = {
             "clientOid": str(int(time.time() * 1000)),
             "side": side,
-            "symbol": symbol,
+            "symbol": symbol_pair,
             "type": order_type
         }
         if order_type == "market":
@@ -127,7 +232,7 @@ class KuCoinClient:
             response = requests.post(url, headers=headers, data=body)
             result = response.json()
             if result.get("code") == "200000":
-                print(f"[✅] 下单成功（{side} {symbol}）: {result['data']['orderId']}")
+                print(f"[✅] 下单成功（{side} {symbol_pair}）: {result['data']['orderId']}")
                 return result["data"]["orderId"]
             else:
                 print(f"[ERROR] 下单失败: {result}")
@@ -135,23 +240,30 @@ class KuCoinClient:
         except Exception as e:
             print(f"[ERROR] 下单请求异常: {e}")
             return None
-
-    def get_symbol_price(self, symbol):
-        if "-" not in symbol and symbol not in ["USDT", "USDC", "USDD", "DAI", "BTC", "ETH"]:
-            query_symbol = f"{symbol}-USDT"
-        else:
-            query_symbol = symbol
-        url = f"{self.base_url}/api/v1/market/orderbook/level1"
-        params = {"symbol": query_symbol}
+            
+    def get_fills(self, symbol, side=None, limit=50):
+        endpoint = "/api/v1/fills"
+        url = self.base_url + endpoint
+        params = {
+            "symbol": symbol,
+            "tradeType": "TRADE",
+            "pageSize": limit
+        }
+        if side:
+            params["side"] = side
+        headers = self._get_headers("GET", endpoint)
         try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
+            response = requests.get(url, headers=headers, params=params, timeout=10)
             data = response.json()
-            if data and data.get("data") and data["data"].get("price"):
-                return float(data["data"]["price"])
+            if data.get("code") == "200000":
+                fills = data.get("data", {}).get("items", [])
+                return fills
             else:
-                print(f"[WARN] 无法获取 {query_symbol} 最新价，API返回：{data}")
-                return None
+                print(f"[get_fills] 失败: {data}")
+                return []
         except Exception as e:
-            print(f"[ERROR] 获取价格失败 {symbol}: {e}")
-            return None
+            print(f"[get_fills] 异常: {e}")
+            return []
+
+    def get_supported_symbols(self):
+        return list(self.symbol_limits_cache.keys())
