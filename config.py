@@ -1,5 +1,8 @@
 # config.py
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 
 CONFIG = {
     # --- 策略核心参数 ---
