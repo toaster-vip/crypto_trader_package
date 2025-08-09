@@ -32,8 +32,8 @@ def save_cooldown_pool(pool):
 
 def calc_weighted_avg_entry_price(api, symbol, amount_min=1e-6):
     fills = api.get_fills(symbol, side="buy", limit=100)
-    total_amt = 0
-    total_cost = 0
+    total_amt = 0.0
+    total_cost = 0.0
     for f in fills:
         try:
             sz = float(f.get("size", 0))
@@ -58,7 +58,7 @@ def get_dynamic_entry_price(symbol, pos, entry_price_state, api=None):
     if api is not None:
         weighted = calc_weighted_avg_entry_price(api, sym)
         if weighted > 0:
-            log_info(f"[entry_price] {sym} 本地/持仓为0，已自动回填加权均价: {weighted}")
+            log_info(f"[entry_price] {sym} 回填加权均价: {weighted}")
             return weighted
     return Decimal("0")
 
@@ -75,36 +75,44 @@ def get_amount(pos):
     return Decimal("0")
 
 def pretty_positions(positions):
-    """格式化输出持仓dict"""
     return {k: float(get_amount(v)) for k, v in positions.items()}
 
 def pretty_prices(prices, syms=None):
-    """格式化输出币价"""
     if not syms:
         return prices
     return {k: float(prices.get(k, 0)) for k in syms}
 
 def print_snapshot(api, tag="", extra_syms=None):
+    """按 LOG_DETAIL 控噪"""
     balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
     positions = api.get_positions(simulate=CONFIG.get("SIMULATE", False))
-    all_prices = api.get_all_prices()
-    syms = list(positions.keys())
-    if extra_syms:
-        syms = list(set(syms + list(extra_syms)))
-    price_map = pretty_prices(all_prices, syms)
-    log_info(f"\n====== {tag}账户快照 ======")
-    log_info(f"[账户余额] USDT={balances.get('USDT',0)}, 详情: {balances}")
-    log_info(f"[持有币]   {pretty_positions(positions)}")
-    log_info(f"[币价]     {price_map}")
-    log_info("====== End 快照 ======\n")
+    if CONFIG.get("LOG_DETAIL", True):
+        all_prices = api.get_all_prices()
+        syms = list(positions.keys())
+        if extra_syms:
+            syms = list(set(syms + list(extra_syms)))
+        price_map = pretty_prices(all_prices, syms)
+        log_info(f"\n====== {tag}账户快照 ======")
+        log_info(f"[账户余额] USDT={balances.get('USDT',0)}, 详情: {balances}")
+        log_info(f"[持有币]   {pretty_positions(positions)}")
+        log_info(f"[币价]     {price_map}")
+        log_info("====== End 快照 ======\n")
+    else:
+        log_info(f"[快照:{tag}] USDT={balances.get('USDT',0)} 持仓数={len(positions)}")
 
 def print_cooldown_pool(cooldown_pool, current_round):
+    if not CONFIG.get("LOG_DETAIL", True):
+        active = sum(1 for r in cooldown_pool.values() if r > current_round)
+        log_info(f"[冷却池] 活跃={active}")
+        return
     log_info(f"[冷却名单]（当前轮:{current_round}）:")
+    has_active = False
     for sym, round_num in cooldown_pool.items():
         remain = round_num - current_round
         if remain > 0:
+            has_active = True
             log_info(f"   {sym}: 剩余{remain}轮")
-    if not any(round_num > current_round for round_num in cooldown_pool.values()):
+    if not has_active:
         log_info(f"   当前无冷却币。")
 
 def rebalance_portfolio(
@@ -129,42 +137,37 @@ def rebalance_portfolio(
     # 实时获取最新资金/持仓/币价
     balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
     positions = api.get_positions(simulate=CONFIG.get("SIMULATE", False))
-    all_prices = api.get_all_prices()
+    all_prices = api.get_all_prices() or {}
 
     usdt = Decimal(str(balances.get("USDT", 0)))
     cur_hold = {to_symbol_pair(k): v for k, v in positions.items() if get_amount(v) > 0}
-    hold_syms = set(cur_hold.keys())
 
+    # 用 entry_price_state/weighted 填充估值；失败则估值为0（但不强平）
     total_asset = usdt + sum(
-        get_dynamic_entry_price(k, v, entry_price_state, api=api) * get_amount(v) for k, v in cur_hold.items()
+        get_dynamic_entry_price(k, v, entry_price_state, api=api) * get_amount(v)
+        for k, v in cur_hold.items()
     )
-    per_pos = min(total_asset * MAX_POSITION_RATIO, usdt / max(1, len(top_syms_pair))) if top_syms_pair else Decimal("0")
+    _ = min(total_asset * MAX_POSITION_RATIO, usdt / max(1, len(top_syms_pair))) if top_syms_pair else Decimal("0")
 
-    # ========== 1. 卖出/动态止盈 ==========
+    # ========== 1) 先处理 卖出/止盈/止损 ==========
     sold_count = 0
     for symbol, pos in cur_hold.items():
         sym = to_symbol_pair(symbol)
         amount = get_amount(pos)
+
         entry = get_dynamic_entry_price(sym, pos, entry_price_state, api=api)
-        # 取最新价
         cur_price_raw = all_prices.get(sym, None) or api.get_symbol_price(sym)
         if cur_price_raw is None:
-            log_info(f"[跳过] {sym} 无法获取当前价格，自动跳过卖出/持有决策！")
+            log_info(f"[跳过] {sym} 无法获取当前价格，跳过卖出/持有决策。")
             continue
         cur_price = Decimal(str(cur_price_raw))
-        pnl = (cur_price - entry) / (entry + Decimal('1e-8')) if entry > 0 else Decimal("0")
 
-        # 临时强平逻辑
         if entry <= 0:
-            log_info(f"[临时修正] {sym} 由于买入价为0，直接强平卖出！")
-            if not dry_run:
-                place_order('sell', sym, float(amount))
-                if cooldown_pool is not None:
-                    cooldown_pool[sym] = current_round + cooldown_rounds
-                if sym in entry_price_state:
-                    entry_price_state.pop(sym)
-            sold_count += 1
+            # **关键修复**：不再强平；仅跳过并警告一次（避免无限刷屏）
+            log_info(f"[警告] {sym} 缺少有效买入价（entry<=0），已跳过卖出/止损/止盈决策。")
             continue
+
+        pnl = (cur_price - entry) / (entry + Decimal('1e-8'))
 
         # 止损
         if pnl <= STOP_LOSS:
@@ -181,78 +184,75 @@ def rebalance_portfolio(
             log_trade_detail(trade)
             if not dry_run:
                 place_order('sell', sym, float(amount))
-                if cooldown_pool is not None:
-                    cooldown_pool[sym] = current_round + cooldown_rounds
-                if sym in entry_price_state:
-                    entry_price_state.pop(sym)
-            log_info(
-                f"[止损] {sym} 触发止损，卖出并冷却{cooldown_rounds}轮 | 买入价={entry} | 当前价={cur_price} | 盈亏={pnl:.4%}"
-            )
+                cooldown_pool[sym] = current_round + cooldown_rounds
+                entry_price_state.pop(sym, None)
+            log_info(f"[止损] {sym} 触发止损并冷却{cooldown_rounds}轮 | 买入价={entry} | 当前价={cur_price} | 盈亏={pnl:.4%}")
             sold_count += 1
             continue
 
-        # 动态止盈
+        # 动态止盈（热点内才上移）
         if sym in top_syms_pair and pnl >= TAKE_PROFIT:
             entry_price_state[sym] = float(cur_price)
-            log_info(
-                f"[动态止盈] {sym} 达到止盈线且仍为TopN，动态上移entry price: {cur_price} | 原entry: {entry} | 当前价={cur_price} | 盈亏={pnl:.4%}"
-            )
+            log_info(f"[动态止盈] {sym} 达止盈线且仍在TopN，上移entry至 {cur_price} | 原entry: {entry} | 盈亏={pnl:.4%}")
             continue
 
-        # 普通续持
-        if sym not in top_syms_pair:
-            log_info(
-                f"[续持] {sym} 非热点但未触发止盈止损，留仓 | 买入价={entry} | 当前价={cur_price} | 盈亏={pnl:.4%} | 止损线={STOP_LOSS:.2%} | 止盈线={TAKE_PROFIT:.2%}"
-            )
-        else:
-            log_info(
-                f"[持有] {sym} 正常持有 | 买入价={entry} | 当前价={cur_price} | 盈亏={pnl:.4%} | 止损线={STOP_LOSS:.2%} | 止盈线={TAKE_PROFIT:.2%}"
-            )
+        # 续持
+        # （控噪：不再打印两条“持有/续持”分支，减少日志）
+        if CONFIG.get("LOG_DETAIL", True):
+            log_info(f"[持有] {sym} | entry={entry} | cur={cur_price} | pnl={pnl:.4%}")
 
-    # ========== 2. 卖出后快照 ==========
+    # 2) 卖出后快照
     balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
     positions = api.get_positions(simulate=CONFIG.get("SIMULATE", False))
-    all_prices = api.get_all_prices()
+    all_prices = api.get_all_prices() or {}
     print_snapshot(api, tag="卖出后", extra_syms=top_syms_pair)
     print_cooldown_pool(cooldown_pool, current_round)
 
-    # ========== 3. 新热点买入 ==========
+    # 3) 新热点买入
     buy_count = 0
+    # 提前获取一次余额，避免循环重复请求
+    balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
+    usdt = Decimal(str(balances.get("USDT", 0)))
+    # 提前获取一次 limits 兜底值
+    minfunds_fallback = Decimal(str(MIN_BUY_AMOUNT))
+
+    # 计算分配
+    top_count = max(1, len(top_syms_pair))
+    per_pos_usdt = min(usdt * MAX_POSITION_RATIO, usdt / top_count)
+
     for symbol in top_syms_pair:
         sym = to_symbol_pair(symbol)
+
         # 冷却池过滤
         cooldown = cooldown_pool.get(sym, 0)
         if cooldown > current_round:
-            log_info(f"[冷却中] {sym} 在冷却期（剩余{cooldown-current_round}轮），跳过买入。")
+            if CONFIG.get("LOG_DETAIL", True):
+                log_info(f"[冷却中] {sym} 剩余{cooldown-current_round}轮，跳过。")
             continue
 
-        balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
-        usdt = Decimal(str(balances.get("USDT", 0)))
+        # 已持有跳过
         positions = api.get_positions(simulate=CONFIG.get("SIMULATE", False))
         hold_syms = set(to_symbol_pair(k) for k in positions.keys() if get_amount(positions[k]) > 0)
         if sym in hold_syms:
-            log_info(f"[跳过] {sym} 已持有，跳过买入。")
             continue
-        # 实时再拉全市场价
-        all_prices = api.get_all_prices()
-        limits = api.get_symbol_limits(sym)
-        funds_increment = Decimal(str(limits.get("minFunds", 0.01))) if limits else Decimal("0.01")
-        per_pos = min(
-            usdt * MAX_POSITION_RATIO,
-            usdt / max(1, len(top_syms_pair))
-        )
-        rounded_amt = (Decimal(per_pos) // funds_increment) * funds_increment
+
+        # 步进限制
+        limits = api.get_symbol_limits(sym) or {}
+        funds_increment = Decimal(str(limits.get("minFunds", minfunds_fallback)))
+
+        # 四舍五入到交易所步进
+        rounded_amt = (Decimal(per_pos_usdt) // funds_increment) * funds_increment
         rounded_amt = rounded_amt.quantize(funds_increment, rounding=ROUND_DOWN)
-        if rounded_amt < funds_increment:
-            log_info(
-                f"[跳过] {sym} 可买金额 {rounded_amt} 不足步进要求（minFunds={funds_increment}），跳过！"
-                f" 资金: USDT={usdt}, MAX_POSITION_RATIO={MAX_POSITION_RATIO}, topN={len(top_syms_pair)}"
-            )
+
+        # 余额再确认
+        balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
+        usdt = Decimal(str(balances.get("USDT", 0)))
+        if usdt < funds_increment or rounded_amt < funds_increment:
+            if CONFIG.get("LOG_DETAIL", True):
+                log_info(f"[跳过] {sym} 可买金额{rounded_amt} 或余额{usdt} 不足 minFunds={funds_increment}。")
             continue
-        if usdt < funds_increment:
-            log_info(f"[跳过] {sym} 可用资金 {usdt} 不足minFunds={funds_increment}，无法买入。")
-            continue
-        log_info(f"[买入] {sym} 买入金额: {rounded_amt:.8f}")
+
+        log_info(f"[买入] {sym} 金额: {rounded_amt:.8f}")
         if not dry_run:
             orderid = place_order('buy', sym, float(rounded_amt))
             entry_price = api.get_symbol_price(sym)
@@ -267,49 +267,21 @@ def rebalance_portfolio(
                 "orderid": orderid,
             })
         buy_count += 1
-        # 买后立即更新usdt余额，保证资金分配不超额
+        # 更新余额，避免超配
         balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
         usdt = Decimal(str(balances.get("USDT", 0)))
+        per_pos_usdt = min(usdt * MAX_POSITION_RATIO, usdt / max(1, (top_count - buy_count)))
 
-    # ========== 4. 买后快照 ==========
-    balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
-    positions = api.get_positions(simulate=CONFIG.get("SIMULATE", False))
-    all_prices = api.get_all_prices()
+    # 4) 买后快照
     print_snapshot(api, tag="买入后", extra_syms=top_syms_pair)
     print_cooldown_pool(cooldown_pool, current_round)
 
-    # ========== 5. 记录结果 ==========
+    # 5) 落盘
     save_entry_price_state(entry_price_state)
     save_cooldown_pool(cooldown_pool)
 
     log_info("[调仓结束]")
     if sold_count == 0:
-        log_info("本轮未发生任何卖出，原因：当前无需要卖出的币或所有持有币均未触发卖出条件。")
+        log_info("本轮未发生卖出。")
     if buy_count == 0:
-        # 输出买入失败原因
-        log_info("本轮未发生任何买入，原因如下：")
-        for symbol in top_syms_pair:
-            sym = to_symbol_pair(symbol)
-            cooldown = cooldown_pool.get(sym, 0)
-            if cooldown > current_round:
-                log_info(f"  - {sym} 在冷却期（剩余{cooldown-current_round}轮）")
-            else:
-                balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
-                usdt = Decimal(str(balances.get("USDT", 0)))
-                limits = api.get_symbol_limits(sym)
-                funds_increment = Decimal(str(limits.get("minFunds", 0.01))) if limits else Decimal("0.01")
-                per_pos = min(
-                    usdt * MAX_POSITION_RATIO,
-                    usdt / max(1, len(top_syms_pair))
-                )
-                rounded_amt = (Decimal(per_pos) // funds_increment) * funds_increment
-                rounded_amt = rounded_amt.quantize(funds_increment, rounding=ROUND_DOWN)
-                if usdt < funds_increment:
-                    log_info(f"  - {sym} 可用资金 {usdt} 不足minFunds={funds_increment}，无法买入。")
-                elif rounded_amt < funds_increment:
-                    log_info(
-                        f"  - {sym} 可买金额 {rounded_amt} 不足步进要求（minFunds={funds_increment}），"
-                        f"资金: USDT={usdt}, MAX_POSITION_RATIO={MAX_POSITION_RATIO}, topN={len(top_syms_pair)}"
-                    )
-                else:
-                    log_info(f"  - {sym} 其它未知原因（持仓已存在？）")
+        log_info("本轮未发生买入（可能因冷却/余额/步进限制）。")
