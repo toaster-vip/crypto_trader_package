@@ -1,83 +1,91 @@
 #!/bin/bash
+set -euo pipefail
 
-# 分支名参数，默认 main
-TARGET_BRANCH="${1:-main}"
-
-# ✅ 加载 .env 环境变量（确保路径正确）
-export $(grep -v '^#' /home/linuxuser/crypto_trader_package/.env | xargs)
-
-# ✅ 激活虚拟环境
-source /home/linuxuser/taenv/bin/activate
-
-# ========== 配置 ==========
+# ====== 可配项 ======
 PROJECT_DIR="/home/linuxuser/crypto_trader_package"
 VENV_DIR="/home/linuxuser/taenv"
-LOCKFILE="/tmp/crypto_trader_lockfile"
 LOG_DIR="/home/linuxuser/trade_logs"
-MAX_RUNTIME=600  # 最大允许 main_trader.py 运行时间（秒）
+LOCKFILE="/tmp/crypto_trader_lockfile"
+MAX_RUNTIME=600                       # main_trader.py 最大允许运行秒数
+TARGET_BRANCH="${1:-big}"             # 默认跑 big 分支；可传参覆盖
 LOGFILE="$LOG_DIR/cron_runonce_$(date '+%Y%m%d').log"
+ENV_FILE="$PROJECT_DIR/.env"
+ENV_BAK="/tmp/crypto_trader_env.$(date +%s).bak"
 
-# ========== 函数：日志输出 ==========
-log() {
-    echo "[$(date '+%F %T')] $1" | tee -a "$LOGFILE"
-}
+# ====== 日志函数 ======
+log(){ echo "[$(date '+%F %T')] $*" | tee -a "$LOGFILE"; }
 
-# ========== 检查并创建日志目录 ==========
+# ====== 目录准备 ======
 mkdir -p "$LOG_DIR"
 
-# ========== 清理运行超时的进程 ==========
+# ====== 终止超时的上次进程 ======
 log "🔍 检查运行超时的 main_trader.py..."
-ps -eo pid,etimes,cmd | grep "[m]ain_trader.py" | while read pid etime cmd; do
-    if [ "$etime" -ge "$MAX_RUNTIME" ]; then
-        log "⏱️ main_trader.py 已运行 $etime 秒，超过 $MAX_RUNTIME 秒，自动 kill PID=$pid"
-        kill -9 "$pid"
-    fi
+ps -eo pid,etimes,cmd | grep "[m]ain_trader.py" | while read -r pid etime cmd; do
+  if [ "${etime:-0}" -ge "$MAX_RUNTIME" ]; then
+    log "⏱️ main_trader.py 已运行 $etime 秒，超过 $MAX_RUNTIME 秒，kill PID=$pid"
+    kill -9 "$pid" || true
+  fi
 done
 
-# ========== 检查锁文件 ==========
+# ====== 锁文件防并发 ======
 if [ -e "$LOCKFILE" ]; then
-    log "🚫 检测到锁文件，跳过本轮执行：$LOCKFILE"
-    exit 1
+  log "🚫 检测到锁文件，跳过本轮：$LOCKFILE"
+  exit 1
 fi
-
-# ========== 创建锁文件 ==========
 touch "$LOCKFILE"
+
 log "🚀 开始执行 run_once.sh"
 
-# ========== 激活虚拟环境 ==========
-log "✅ 激活虚拟环境：$VENV_DIR"
-source "$VENV_DIR/bin/activate"
+# ====== 激活虚拟环境 ======
+if [ -f "$VENV_DIR/bin/activate" ]; then
+  log "✅ 激活虚拟环境：$VENV_DIR"
+  # shellcheck disable=SC1091
+  source "$VENV_DIR/bin/activate"
+else
+  log "⚠️ 未找到虚拟环境 $VENV_DIR，继续使用系统 Python"
+fi
 
-# ========== 进入项目目录 ==========
-cd "$PROJECT_DIR" || {
-    log "❌ 无法进入项目目录 $PROJECT_DIR"
-    rm -f "$LOCKFILE"
-    exit 1
-}
+# ====== 进入项目目录 ======
+cd "$PROJECT_DIR" || { log "❌ 无法进入项目目录 $PROJECT_DIR"; rm -f "$LOCKFILE"; exit 1; }
 
-# ========== 拉取最新 Git 代码，动态切换分支 ==========
-TARGET_BRANCH="${1:-main}"  # 支持传参，也可直接修改这里默认分支
-log "🔄 尝试切换并拉取 Git 分支 $TARGET_BRANCH ..."
-git fetch origin
-git checkout $TARGET_BRANCH || {
-    log "❌ 切换分支失败，跳过执行"
-    rm -f "$LOCKFILE"
-    exit 1
-}
-git reset --hard origin/$TARGET_BRANCH
-git clean -fd
-git pull origin $TARGET_BRANCH || {
-    log "⚠️ Git 拉取失败，跳过执行"
-    rm -f "$LOCKFILE"
-    exit 1
-}
+# ====== 在 git 操作前，优先备份 .env（如果存在） ======
+if [ -f "$ENV_FILE" ]; then
+  cp -f "$ENV_FILE" "$ENV_BAK"
+  log "🧰 已备份 .env 到 $ENV_BAK"
+fi
 
-# ========== 执行主程序 ==========
+# ====== 拉取指定分支最新代码 ======
+log "🔄 切换并拉取 Git 分支：$TARGET_BRANCH ..."
+git fetch origin || log "⚠️ git fetch 报警告，继续"
+# 用 checkout + reset，确保和远端一致
+git checkout "$TARGET_BRANCH" || { log "❌ 切分支失败"; rm -f "$LOCKFILE"; exit 1; }
+git reset --hard "origin/$TARGET_BRANCH" || log "⚠️ git reset 报警告"
+git clean -fd || log "⚠️ git clean 报警告"
+git pull origin "$TARGET_BRANCH" || log "⚠️ git pull 报警告"
+
+# ====== 如 .env 被删，自动还原 ======
+if [ ! -f "$ENV_FILE" ] && [ -f "$ENV_BAK" ]; then
+  cp -f "$ENV_BAK" "$ENV_FILE"
+  log "♻️ 已还原 .env"
+fi
+
+# ====== 加载 .env（安全方式，不打印变量）======
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+  log "🔑 已加载 .env 环境变量"
+else
+  log "⚠️ 未找到 .env，依赖系统环境变量继续"
+fi
+
+# ====== 执行主程序 ======
 log "▶️ 执行 main_trader.py..."
-python3 main_trader.py
+python3 main_trader.py || true
 RESULT=$?
 
-# ========== 清理锁文件 ==========
+# ====== 结束与清理 ======
 rm -f "$LOCKFILE"
 log "✅ 本轮执行完毕，退出码：$RESULT"
-exit $RESULT
+exit "$RESULT"
