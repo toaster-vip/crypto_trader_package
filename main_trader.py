@@ -78,40 +78,41 @@ def main():
             exclude_symbols=exclude_syms,
             market_ok=market_ok
         )
-        if not hot_symbols:
-            log_error("本轮无热点币（可能因市场过滤或行情为空），暂停运行")
-            return
 
         # 统一标准化为 xxx-USDT
-        hot_symbols = [to_symbol_pair(s) for s in hot_symbols]
-        log_info(f"本轮热点池: {hot_symbols}")
+        hot_symbols = [to_symbol_pair(s) for s in (hot_symbols or [])]
+        if not hot_symbols:
+            log_error("本轮无热点币（可能因市场过滤或行情为空），本轮仅检查持仓止盈/止损，不新开仓")
+            top_symbols = []
+        else:
+            log_info(f"本轮热点池: {hot_symbols}")
 
-        # ========== 多线程评分 ==========
-        symbol_scores = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG["DEFAULT_WORKERS"]) as executor:
-            future_map = {executor.submit(fetch_score, api, s): s for s in hot_symbols}
-            for fut in concurrent.futures.as_completed(future_map):
-                s = future_map[fut]
-                try:
-                    sym, sc = fut.result()
-                except Exception as e:
-                    log_error(f"评分线程异常 {s}: {e}")
-                    continue
-                # 过滤成交额/极端波动
-                if sc.get("turnover", 0) < CONFIG["MIN_TURNOVER_1H"]:
-                    continue
-                if sc.get("is_extreme", False):
-                    continue
-                symbol_scores.append((sym, sc.get("score", -999), sc))
+            # ========== 多线程评分 ==========
+            symbol_scores = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG["DEFAULT_WORKERS"]) as executor:
+                future_map = {executor.submit(fetch_score, api, s): s for s in hot_symbols}
+                for fut in concurrent.futures.as_completed(future_map):
+                    s = future_map[fut]
+                    try:
+                        sym, sc = fut.result()
+                    except Exception as e:
+                        log_error(f"评分线程异常 {s}: {e}")
+                        continue
+                    # 过滤成交额/极端波动
+                    if sc.get("turnover", 0) < CONFIG["MIN_TURNOVER_1H"]:
+                        continue
+                    if sc.get("is_extreme", False):
+                        continue
+                    symbol_scores.append((sym, sc.get("score", -999), sc))
 
-        if not symbol_scores:
-            log_error("有效候选为0（成交额不足或极端波动剔除），暂停本轮")
-            return
-
-        symbol_scores.sort(key=lambda x: x[1], reverse=True)
-        topN = CONFIG["TOP_N"]
-        top_symbols = [x[0] for x in symbol_scores[:topN]]
-        log_info(f"本轮选中TopN: {top_symbols}")
+            if not symbol_scores:
+                log_error("有效候选为0（成交额不足或极端波动剔除），本轮仅检查持仓止盈/止损，不新开仓")
+                top_symbols = []
+            else:
+                symbol_scores.sort(key=lambda x: x[1], reverse=True)
+                topN = CONFIG["TOP_N"]
+                top_symbols = [x[0] for x in symbol_scores[:topN]]
+                log_info(f"本轮选中TopN: {top_symbols}")
 
         # ========== 资产快照前 ==========
         balances = api.get_balances(simulate=CONFIG["SIMULATE"])
