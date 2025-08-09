@@ -8,6 +8,7 @@ __pycache__/
 venv/
 taenv/
 .env/
+.env
 
 # ===== 日志文件和本地快照 =====
 *.log
