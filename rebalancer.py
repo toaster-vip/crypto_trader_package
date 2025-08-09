@@ -68,7 +68,7 @@ TRAILING_STOP_PCT = Decimal(str(CONFIG["TRAILING_STOP_PCT"]))
 MAX_POSITION_RATIO = Decimal(str(CONFIG["MAX_POSITION_RATIO"]))
 MIN_BUY_AMOUNT = Decimal(str(CONFIG["MIN_BUY_AMOUNT"]))
 COOLDOWN_ROUNDS = CONFIG.get("COOLDOWN_ROUNDS", 3)
-# 新增：非热点达到止盈时的兑现比例（1.0=全仓，0.5=卖一半）
+# 新增：非热点止盈退出比例（1.0=全仓清掉，0.5=卖半仓）
 TAKE_PROFIT_EXIT_PCT = Decimal(str(CONFIG.get("TAKE_PROFIT_EXIT_PCT", 1.0)))
 
 def get_amount(pos):
@@ -164,21 +164,20 @@ def rebalance_portfolio(
     usdt = Decimal(str(balances.get("USDT", 0)))
     cur_hold = {to_symbol_pair(k): v for k, v in positions.items() if get_amount(v) > 0}
 
-    # 资产估值（用于买入阶段的预算）
+    # 资产估值（买入预算参考）
     total_asset = usdt + sum(
         get_dynamic_entry_price(k, v, entry_price_state, api=api) * get_amount(v)
         for k, v in cur_hold.items()
     )
-    # 位置上限（买入阶段使用）
     _ = min(total_asset * MAX_POSITION_RATIO, usdt / max(1, len(top_syms_pair))) if top_syms_pair else Decimal("0")
 
-    # ========== 1) 卖出/止盈/止损 ==========
+    # ========== 1) 先处理 卖出/止盈/止损 ==========
     sold_count = 0
     for symbol, pos in cur_hold.items():
         sym = to_symbol_pair(symbol)
         amount = get_amount(pos)
 
-        # —— 获取当前价 —— #
+        entry = get_dynamic_entry_price(sym, pos, entry_price_state, api=api)
         cur_price_raw = all_prices.get(sym, None) or api.get_symbol_price(sym)
         if cur_price_raw is None:
             log_info(f"[跳过] {sym} 无法获取当前价格，跳过卖出/持有决策。")
@@ -186,24 +185,14 @@ def rebalance_portfolio(
             continue
         cur_price = Decimal(str(cur_price_raw))
 
-        # —— 计算 entry（含兜底） —— #
-        entry = get_dynamic_entry_price(sym, pos, entry_price_state, api=api)
         if entry <= 0:
-            # 优先回填成交均价，否则用当前价兜底
-            weighted = calc_weighted_avg_entry_price(api, sym)
-            if weighted > 0:
-                entry = weighted
-                entry_price_state[sym] = float(entry)
-                log_info(f"[entry_price] {sym} 回填成交均价: {entry}")
-            else:
-                entry = cur_price
-                entry_price_state[sym] = float(entry)
-                summary["notes"].append(f"{sym}: entry<=0 用当前价兜底")
-                log_info(f"[entry_price] {sym} 无法回填成交价，使用当前价兜底: {entry}")
+            log_info(f"[警告] {sym} 缺少有效买入价（entry<=0），已跳过卖出/止损/止盈决策。")
+            summary["notes"].append(f"{sym}: entry<=0")
+            continue
 
         pnl = (cur_price - entry) / (entry + Decimal('1e-8'))
 
-        # 1) 止损
+        # —— 止损：任何情况下都执行，并进入冷却 ——
         if pnl <= STOP_LOSS:
             trade = {
                 "type": "sell_candidate",
@@ -216,13 +205,12 @@ def rebalance_portfolio(
                 "reason": "STOP_LOSS"
             }
             log_trade_detail(trade)
+            cooldown_until = cooldown_pool.get(sym, current_round)
             if not dry_run:
                 place_order('sell', sym, float(amount))
                 cooldown_until = current_round + cooldown_rounds
                 cooldown_pool[sym] = cooldown_until
                 entry_price_state.pop(sym, None)
-            else:
-                cooldown_until = cooldown_pool.get(sym, current_round)
             log_info(f"[止损] {sym} 触发止损并冷却{cooldown_rounds}轮 | entry={entry} | cur={cur_price} | pnl={pnl:.4%}")
             sold_count += 1
             summary["sells"].append({
@@ -237,39 +225,50 @@ def rebalance_portfolio(
             summary["cooldown_updates"].append({"symbol": sym, "until": int(cooldown_until)})
             continue
 
-        # 2) 动态止盈（热点中）：只上移 entry，不卖
+        # —— 动态止盈（仍在TopN内）：只上移 entry，不卖 —— 
         if sym in top_syms_pair and pnl >= TAKE_PROFIT:
-            entry_price_state[sym] = float(cur_price)
+            entry_price_state[sym] = float(cur_price)  # “锁盈”，继续持有让利润奔跑
             log_info(f"[动态止盈] {sym} 达止盈线且仍在TopN，上移entry至 {cur_price} | 原entry: {entry} | pnl={pnl:.4%}")
             continue
 
-        # 3) 非热点且达到止盈：兑现（按 TAKE_PROFIT_EXIT_PCT 比例）
-        if sym not in top_syms_pair and pnl >= TAKE_PROFIT:
-            sell_sz = (amount * TAKE_PROFIT_EXIT_PCT).quantize(Decimal("1e-12"), rounding=ROUND_DOWN)
-            if sell_sz > 0:
+        # —— 非热点 + 达到止盈：按比例卖出（默认100%全清）——
+        if sym not in top_syms_pair and pnl >= TAKE_PROFIT and TAKE_PROFIT_EXIT_PCT > 0:
+            sell_amt = (amount * TAKE_PROFIT_EXIT_PCT).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+            # 防极小量误差
+            if sell_amt > 0:
                 if not dry_run:
-                    place_order('sell', sym, float(sell_sz))
-                    cooldown_until = current_round + cooldown_rounds
-                    cooldown_pool[sym] = cooldown_until
-                    if TAKE_PROFIT_EXIT_PCT >= Decimal("0.999"):
-                        entry_price_state.pop(sym, None)
-                else:
-                    cooldown_until = cooldown_pool.get(sym, current_round)
-                log_info(f"[止盈退出] {sym} 不在TopN且达止盈线，卖出{float(TAKE_PROFIT_EXIT_PCT)*100:.0f}% 并冷却{cooldown_rounds}轮 | pnl={pnl:.2%}")
+                    place_order('sell', sym, float(sell_amt))
                 sold_count += 1
+                reason = "TAKE_PROFIT_EXIT"
+                log_info(f"[止盈卖出] {sym} 非热点且达止盈，卖出 {sell_amt} / {amount} ({TAKE_PROFIT_EXIT_PCT:.2f}) | entry={entry} | cur={cur_price} | pnl={pnl:.4%}")
+                log_trade_detail({
+                    "type": "sell",
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "symbol": sym,
+                    "amount": float(sell_amt),
+                    "base_price": float(entry),
+                    "current_price": float(cur_price),
+                    "pnl_pct": float(pnl),
+                    "reason": reason
+                })
                 summary["sells"].append({
                     "symbol": sym,
-                    "amount": float(sell_sz),
+                    "amount": float(sell_amt),
                     "entry": float(entry),
                     "price": float(cur_price),
                     "pnl_pct": float(pnl),
-                    "reason": "TAKE_PROFIT_EXIT",
-                    "cooldown_until": int(cooldown_until),
+                    "reason": reason,
+                    "cooldown_until": None
                 })
-                summary["cooldown_updates"].append({"symbol": sym, "until": int(cooldown_until)})
+                # 如果基本全清了，清理entry缓存
+                if sell_amt >= amount * Decimal("0.999"):
+                    entry_price_state.pop(sym, None)
+                else:
+                    # 保留entry不变，方便后续基于原成本线的风险判断
+                    pass
                 continue
 
-        # 4) 其余：续持
+        # —— 续持（未触发任何条件）——
         if CONFIG.get("LOG_DETAIL", True):
             log_info(f"[持有] {sym} | entry={entry} | cur={cur_price} | pnl={pnl:.4%}")
             summary["holds"].append({
@@ -373,5 +372,5 @@ def rebalance_portfolio(
     if buy_count == 0 and top_syms_pair:
         log_info("本轮未发生买入（可能因冷却/余额/步进限制）。")
 
-    # 返回 summary，供 main_trader 发送通知
+    # 返回 summary，供 main_trader 组织 Server 酱通知
     return summary
