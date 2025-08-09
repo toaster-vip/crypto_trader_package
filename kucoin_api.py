@@ -38,7 +38,7 @@ class KuCoinClient:
         print("📁 [KuCoinClient] config.py 加载成功")
         self._init_symbol_limits_cache()
 
-    # ====== 私有签名核心：包含 querystring ======
+    # ===== 签名：必须把 querystring 拼进 requestPath =====
     def _get_headers(
         self,
         method: str,
@@ -47,23 +47,20 @@ class KuCoinClient:
         body: Optional[Any] = None,
     ) -> Dict[str, str]:
         """
-        KuCoin V2 签名规则：
+        KuCoin V2:
         prehash = timestamp + method + requestPath + body
-        其中 requestPath = endpoint + ('?' + queryString) (若有 params)
-        queryString 需要 URL 编码（key 按字典序排序）
-        body 必须是字符串（POST json）
+        requestPath = endpoint + ('?' + urlencode(params_sorted))  (若有 params)
+        body 为字符串（POST json 且无需空格）
         """
         ts = str(int(time.time() * 1000))
 
-        # 生成 querystring
+        # querystring 必须按 key 排序并 URL 编码
         request_path = endpoint
         if params:
-            # 注意：要按照 key 排序，且需要 urlencode
             sorted_items = sorted(params.items(), key=lambda kv: kv[0])
-            query = urllib.parse.urlencode([(k, v) for k, v in sorted_items], doseq=True)
+            query = urllib.parse.urlencode(sorted_items, doseq=True)
             request_path = f"{endpoint}?{query}"
 
-        # 处理 body（只对 POST/PUT 等有 body 的请求）
         if body is None:
             body_str = ""
         elif isinstance(body, (dict, list)):
@@ -73,12 +70,9 @@ class KuCoinClient:
 
         prehash = f"{ts}{method.upper()}{request_path}{body_str}"
 
-        # sign
         signature = base64.b64encode(
             hmac.new(self.api_secret.encode("utf-8"), prehash.encode("utf-8"), hashlib.sha256).digest()
         ).decode()
-
-        # passphrase (v2 需要用 secret 再 HMAC-SHA256 后 base64)
         passphrase = base64.b64encode(
             hmac.new(self.api_secret.encode("utf-8"), self.passphrase.encode("utf-8"), hashlib.sha256).digest()
         ).decode()
@@ -92,7 +86,7 @@ class KuCoinClient:
             "Content-Type": "application/json",
         }
 
-    # ====== 公共：交易对限制缓存 ======
+    # ===== 公共：交易对限制缓存 =====
     def _init_symbol_limits_cache(self):
         print("[INFO] ⏳ 正在加载所有交易对限制信息...")
         try:
@@ -115,10 +109,9 @@ class KuCoinClient:
             print(f"[ERROR] 初始化 symbol 限制缓存失败: {e}")
 
     def get_symbol_limits(self, symbol: str):
-        sym = to_symbol_pair(symbol)
-        return self.symbol_limits_cache.get(sym, None)
+        return self.symbol_limits_cache.get(to_symbol_pair(symbol))
 
-    # ====== 公共行情 ======
+    # ===== 公共行情 =====
     def get_all_tickers(self) -> Dict[str, Dict[str, float]]:
         url = self.base_url + "/api/v1/market/allTickers"
         for _ in range(3):
@@ -166,13 +159,12 @@ class KuCoinClient:
         params = {"symbol": sym}
         try:
             response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
             data = response.json()
-            if data and data.get("data") and data["data"].get("price"):
-                return safe_float(data["data"]["price"])
-            else:
-                print(f"[WARN] 无法获取 {sym} 最新价，API返回：{data}")
-                return None
+            px = (data or {}).get("data", {}).get("price")
+            if px is not None:
+                return safe_float(px)
+            print(f"[WARN] 无法获取 {sym} 最新价，API返回：{data}")
+            return None
         except Exception as e:
             print(f"[ERROR] 获取价格失败 {symbol}: {e}")
             return None
@@ -189,7 +181,6 @@ class KuCoinClient:
                     print(f"[ERROR] K线数据为空: {symbol}")
                     return None
                 import pandas as pd
-
                 df = pd.DataFrame(candles, columns=["t", "o", "c", "h", "l", "v", "turnover"])
                 df = df.sort_values(by="t")
                 for col in ["o", "c", "h", "l", "v", "turnover"]:
@@ -205,13 +196,12 @@ class KuCoinClient:
                 time.sleep(2)
         return None
 
-    # ====== 私有：账户与持仓 ======
+    # ===== 私有：账户与持仓 =====
     def get_account_holdings(self) -> Dict[str, float]:
         endpoint = "/api/v1/accounts"
-        url = self.base_url + endpoint
         headers = self._get_headers("GET", endpoint, params=None, body=None)
         try:
-            response = requests.get(url, headers=headers, timeout=10)
+            response = requests.get(self.base_url + endpoint, headers=headers, timeout=10)
             data = response.json()
             balances = {}
             for acc in data.get("data", []):
@@ -242,7 +232,7 @@ class KuCoinClient:
                 positions[f"{coin}-USDT"] = {"amount": amount}
         return positions
 
-    # ====== 私有：下单与成交 ======
+    # ===== 私有：下单与成交 =====
     def place_order(self, side: str, symbol: str, size: float, price: Optional[float] = None):
         symbol_pair = to_symbol_pair(symbol)
         if CONFIG.get("DRY_RUN", False):
@@ -260,9 +250,9 @@ class KuCoinClient:
         }
         if order_type == "market":
             if side == "buy":
-                body_dict["funds"] = str(size)   # 买入按 USDT 金额
+                body_dict["funds"] = str(size)   # 买：按 USDT 金额
             else:
-                body_dict["size"] = str(size)    # 卖出按币的数量
+                body_dict["size"] = str(size)    # 卖：按币数量
         else:
             body_dict["size"] = str(size)
             body_dict["price"] = str(price)
@@ -276,16 +266,14 @@ class KuCoinClient:
                 order_id = result["data"]["orderId"]
                 print(f"[✅] 下单成功（{side} {symbol_pair}）: {order_id}")
                 return order_id
-            else:
-                print(f"[ERROR] 下单失败: {result}")
-                return None
+            print(f"[ERROR] 下单失败: {result}")
+            return None
         except Exception as e:
             print(f"[ERROR] 下单请求异常: {e}")
             return None
 
     def get_fills(self, symbol: str, side: Optional[str] = None, limit: int = 50):
         endpoint = "/api/v1/fills"
-        url = self.base_url + endpoint
         params = {
             "symbol": to_symbol_pair(symbol),
             "tradeType": "TRADE",
@@ -293,17 +281,14 @@ class KuCoinClient:
         }
         if side:
             params["side"] = side
-
         headers = self._get_headers("GET", endpoint, params=params, body=None)
         try:
-            response = requests.get(url, headers=headers, params=params, timeout=10)
+            response = requests.get(self.base_url + endpoint, headers=headers, params=params, timeout=10)
             data = response.json()
             if data.get("code") == "200000":
-                fills = data.get("data", {}).get("items", [])
-                return fills
-            else:
-                print(f"[get_fills] 失败: {data}")
-                return []
+                return data.get("data", {}).get("items", [])
+            print(f"[get_fills] 失败: {data}")
+            return []
         except Exception as e:
             print(f"[get_fills] 异常: {e}")
             return []
