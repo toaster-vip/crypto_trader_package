@@ -1,4 +1,4 @@
-# main_trader.py（展示完整，直接粘贴覆盖）
+# main_trader.py
 import time
 import os
 import json
@@ -12,6 +12,7 @@ from rebalancer import rebalance_portfolio
 from log_utils import init_logger, log_snapshot, log_info, log_error
 from notifier import send_serverchan_notification
 
+# ==== 冷却机制相关 ====
 COOLDOWN_FILE = "/home/linuxuser/crypto_trader_package/cooldown_pool.json"
 COOLDOWN_ROUNDS = CONFIG.get("COOLDOWN_ROUNDS", 3)
 
@@ -67,20 +68,18 @@ def build_run_summary_md(
     summary: dict,
     current_round: int,
     elapsed_s: float
-) -> (str, str):
+):
     from datetime import datetime
     ts_str = datetime.fromtimestamp(start_ts).strftime("%Y-%m-%d %H:%M:%S")
     title = f"[交易轮次完成] {ts_str} (round={current_round})"
 
-    usdt_b = float(balances_before.get("USDT", 0))
-    usdt_a = float(balances_after.get("USDT", 0))
-    pos_val_b = _portfolio_value(balances_before if False else {}, prices_before)  # 这里不从余额还原仓位
-    # 更准确的估值：用最新 positions。简单起见，用 after 的 positions 估值（main里没有取，估值用 USDT 变化+下单明细已足够）
-    # 如需更准确，可在 main 调 rebalance 后再次拉 positions 传入这里估值。
+    usdt_b = float(balances_before.get("USDT", 0) or 0)
+    usdt_a = float(balances_after.get("USDT", 0) or 0)
 
-    sells = summary.get("sells", [])
-    buys = summary.get("buys", [])
-    notes = summary.get("notes", [])
+    sells = summary.get("sells", []) if summary else []
+    buys = summary.get("buys", []) if summary else []
+    notes = summary.get("notes", []) if summary else []
+    cd_updates = summary.get("cooldown_updates", []) if summary else []
 
     # 概览
     overview = []
@@ -91,29 +90,36 @@ def build_run_summary_md(
     overview.append(f"- 用时：{elapsed_s:.2f}s")
 
     # 卖出表
-    sell_lines = ["| symbol | amount | entry | price | PnL% | reason | cooldown |",
-                  "|---|---:|---:|---:|---:|---|---:|"]
+    sell_lines = [
+        "| symbol | amount | entry | price | PnL% | reason | cooldown |",
+        "|---|---:|---:|---:|---:|---|---:|",
+    ]
     for s in sells:
-        sell_lines.append(f"| {s['symbol']} | {s['amount']:.6g} | {s['entry']:.6g} | {s['price']:.6g} | {_fmt_pct(s['pnl_pct'])} | {s['reason']} | {s.get('cooldown_until','')} |")
+        sell_lines.append(
+            f"| {s.get('symbol','')} | {s.get('amount',0):.6g} | {s.get('entry',0):.6g} | "
+            f"{s.get('price',0):.6g} | {_fmt_pct(s.get('pnl_pct',0))} | {s.get('reason','')} | "
+            f"{s.get('cooldown_until','')} |"
+        )
     sells_md = "\n".join(sell_lines) if sells else "_无_"
 
     # 买入表
-    buy_lines = ["| symbol | funds(USDT) | price | orderid |",
-                 "|---|---:|---:|---|"]
+    buy_lines = ["| symbol | funds(USDT) | price | orderid |", "|---|---:|---:|---|"]
     for b in buys:
-        pr = "NA" if b.get("price") is None else f"{b['price']:.6g}"
-        buy_lines.append(f"| {b['symbol']} | {b['funds']:.6g} | {pr} | {b.get('orderid','')} |")
+        pr = b.get("price")
+        pr_str = "NA" if pr in (None, "NA") else f"{float(pr):.6g}"
+        buy_lines.append(
+            f"| {b.get('symbol','')} | {float(b.get('funds',0)):.6g} | {pr_str} | {b.get('orderid','')} |"
+        )
     buys_md = "\n".join(buy_lines) if buys else "_无_"
 
-    # 冷却池变化（摘要）
-    cd_updates = summary.get("cooldown_updates", [])
-    cd_md = ", ".join([f"{c['symbol']}→{c['until']}" for c in cd_updates]) if cd_updates else "_无_"
+    # 冷却池变化
+    cd_md = ", ".join([f"{c.get('symbol','')}→{c.get('until','')}" for c in cd_updates]) if cd_updates else "_无_"
 
     # 告警/异常
     notes_md = ("; ".join(notes)) if notes else "_无_"
 
     # TopN/候选（精简）
-    hot_md = ", ".join(hot_symbols[:10]) + (" ..." if hot_symbols and len(hot_symbols) > 10 else "")
+    hot_md = ", ".join((hot_symbols or [])[:10]) + (" ..." if hot_symbols and len(hot_symbols) > 10 else "")
     top_md = ", ".join(top_symbols or [])
 
     # 组装 Markdown
@@ -146,30 +152,40 @@ def fetch_score(api, symbol):
 def main():
     init_logger(CONFIG.get("LOG_LEVEL"))
     start_ts = time.time()
+    balances_before = {}
+    balances_after = {}
+    prices_before = {}
+    prices_after = {}
+    hot_symbols = []
+    top_symbols = []
+    summary = {}
+
     try:
         api = KuCoinClient()
         current_round = int(time.time() // (3600 * 4))
+
+        # 冷却池读取与清理
         cooldown_pool = load_cooldown_pool()
         removed = prune_cooldown_pool(cooldown_pool, current_round)
         if removed:
             log_info(f"冷却池清理完成：移除 {removed} 个已过期项")
-
         exclude_syms = active_cooldown_symbols(cooldown_pool, current_round)
+
+        # 市场过滤
         market_ok = is_market_ok(api)
         log_info(f"市场过滤结果 market_ok={market_ok}")
 
+        # 候选池
         hot_symbols = get_top_gainers_and_volume(
             api,
             top_n=CONFIG["HOT_TOP_N"],
             exclude_symbols=exclude_syms,
             market_ok=market_ok
         ) or []
-
         hot_symbols = [to_symbol_pair(s) for s in hot_symbols]
-        if not hot_symbols:
-            log_error("本轮无热点币（可能因市场过滤或行情为空），本轮仅检查持仓止盈/止损，不新开仓")
-            top_symbols = []
-        else:
+
+        # 打分选 TopN（若空，则仅做仓位检查）
+        if hot_symbols:
             log_info(f"本轮热点池: {hot_symbols}")
             symbol_scores = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG["DEFAULT_WORKERS"]) as executor:
@@ -186,6 +202,7 @@ def main():
                     if sc.get("is_extreme", False):
                         continue
                     symbol_scores.append((sym, sc.get("score", -999), sc))
+
             if not symbol_scores:
                 log_error("有效候选为0（成交额不足或极端波动剔除），本轮仅检查持仓止盈/止损，不新开仓")
                 top_symbols = []
@@ -193,13 +210,17 @@ def main():
                 symbol_scores.sort(key=lambda x: x[1], reverse=True)
                 top_symbols = [x[0] for x in symbol_scores[:CONFIG["TOP_N"]]]
                 log_info(f"本轮选中TopN: {top_symbols}")
+        else:
+            log_error("本轮无热点币（可能因市场过滤或行情为空），本轮仅检查持仓止盈/止损，不新开仓")
+            top_symbols = []
 
+        # 快照（前）
         balances_before = api.get_balances(simulate=CONFIG["SIMULATE"])
         positions_before = api.get_positions(simulate=CONFIG["SIMULATE"])
         prices_before = api.get_all_prices() or {}
         log_snapshot(balances_before, prices_before, tag="before")
 
-        # === 调仓，并接住 summary ===
+        # 调仓
         summary = rebalance_portfolio(
             top_symbols,
             balances_before,
@@ -211,16 +232,18 @@ def main():
             cooldown_pool=cooldown_pool,
             current_round=current_round,
             cooldown_rounds=COOLDOWN_ROUNDS
-        )
+        ) or {}
 
+        # 冷却池保存（即使 summary 为空也要保存可能的变更）
         save_cooldown_pool(cooldown_pool)
 
+        # 快照（后）
         balances_after = api.get_balances(simulate=CONFIG["SIMULATE"])
         prices_after = api.get_all_prices() or {}
         log_snapshot(balances_after, prices_after, tag="after")
 
+        # 通知
         elapsed = time.time() - start_ts
-        # === 构建并发送 Server 酱通知 ===
         title, content = build_run_summary_md(
             start_ts=start_ts,
             market_ok=market_ok,
@@ -234,12 +257,31 @@ def main():
             current_round=current_round,
             elapsed_s=elapsed
         )
-        send_serverchan_notification(title, content)
+        try:
+            send_serverchan_notification(title, content)
+        except Exception as ne:
+            log_error(f"Server酱通知发送失败：{ne}")
 
         log_info(f"本轮交易完成，用时 {elapsed:.2f}s\n")
 
     except Exception as e:
         log_error(f"main_trader 未捕获异常：{e}\n{traceback.format_exc()}")
+        # 异常时也尽量发一条告警
+        try:
+            elapsed = time.time() - start_ts
+            title = "[告警] main_trader 异常退出"
+            content = f"错误：{e}\n\n{traceback.format_exc()}\n\n用时：{elapsed:.2f}s"
+            send_serverchan_notification(title, content)
+        except Exception:
+            pass
+    finally:
+        # 确保冷却池尽力落盘（即使前面异常）
+        try:
+            # 如果上面没定义 cooldown_pool，这里兜底不报错
+            if "cooldown_pool" in locals():
+                save_cooldown_pool(cooldown_pool)
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()
