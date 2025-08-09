@@ -4,6 +4,7 @@ import os
 import json
 import concurrent.futures
 import traceback
+import pandas as pd  # 用于计算 EMA
 
 from config import CONFIG
 from strategy import is_market_ok, get_top_gainers_and_volume, get_symbol_score
@@ -149,6 +150,68 @@ def fetch_score(api, symbol):
         log_error(f"评分失败 {symbol}: {e}")
         return symbol, {"score": -999, "turnover": 0, "open": 0, "is_new_coin": True, "is_extreme": True}
 
+def _apply_4h_filter(api, candidates):
+    """
+    根据 config 的 4h 条件过滤候选池：
+      - pct_4h >= MIN_PCT_4H
+      - (可选) 收盘 > 1h EMA(EMA_WINDOW_1H)
+      - 近6根均量 / 全部均量 >= MIN_VOL_FACTOR
+    如过滤后数量仍 < TOP_N 且开启放宽，则按 RELAX_FACTOR 放宽条件后再筛一遍。
+    """
+    if not CONFIG.get("USE_4H_FILTER", False):
+        return candidates  # 未开启，直接返回
+
+    if not candidates:
+        return candidates
+
+    ema_win = int(CONFIG.get("EMA_WINDOW_1H", 10))
+    min_pct_4h = float(CONFIG.get("MIN_PCT_4H", 0.01))
+    min_vol_factor = float(CONFIG.get("MIN_VOL_FACTOR", 1.1))
+    require_above_ema = bool(CONFIG.get("REQUIRE_LAST1H_ABOVE_EMA", True))
+
+    def _pass(sym, pct4h_thr, vol_factor_thr, require_ema):
+        df = api.get_klines(sym, "1hour", max(ema_win + 6, 8))
+        if df is None or len(df) < 4:
+            return False
+        close = df["close"].astype(float).values
+        vol = df["volume"].astype(float).values
+
+        open_4h = float(df["open"].iloc[-4])
+        close_now = float(df["close"].iloc[-1])
+        pct_4h = (close_now - open_4h) / (open_4h + CONFIG["EPS"])
+
+        # EMA
+        if require_ema:
+            ema = pd.Series(close).ewm(span=ema_win, adjust=False).mean().iloc[-1]
+            ema_ok = close_now > float(ema)
+        else:
+            ema_ok = True
+
+        # 量能
+        vol_recent = vol[-6:].mean() if len(vol) >= 6 else vol.mean()
+        vol_all = vol.mean()
+        vol_ok = (vol_recent / (vol_all + CONFIG["EPS"])) >= vol_factor_thr
+
+        return (pct_4h >= pct4h_thr) and ema_ok and vol_ok
+
+    # 第一次严格筛
+    strict_list = [s for s in candidates if _pass(s, min_pct_4h, min_vol_factor, require_above_ema)]
+
+    # 如果太少，看是否需要放宽
+    if CONFIG.get("RELAX_ON_FEW", True) and len(strict_list) < CONFIG.get("TOP_N", 2):
+        relax = float(CONFIG.get("RELAX_FACTOR", 0.7))
+        # 放宽：降低涨幅&量能阈值；EMA 条件不放宽（也可以按需改为放宽）
+        looser_list = [s for s in candidates if _pass(s, min_pct_4h * relax, min_vol_factor * relax, require_above_ema)]
+        # 如果还是不够，就回退到原 candidates 的前 TOP_N（兜底，保证策略可运行）
+        if len(looser_list) < CONFIG.get("TOP_N", 2):
+            log_info(f"[4h过滤] 过滤后不足TOP_N，已启用兜底（原候选前N）")
+            return candidates[:CONFIG.get("TOP_N", 2)]
+        log_info(f"[4h过滤] 放宽后通过：{looser_list}")
+        return looser_list
+
+    log_info(f"[4h过滤] 通过：{strict_list}")
+    return strict_list
+
 def main():
     init_logger(CONFIG.get("LOG_LEVEL"))
     start_ts = time.time()
@@ -175,7 +238,7 @@ def main():
         market_ok = is_market_ok(api)
         log_info(f"市场过滤结果 market_ok={market_ok}")
 
-        # 候选池
+        # 候选池（基础：24h涨幅 & 成交额）
         hot_symbols = get_top_gainers_and_volume(
             api,
             top_n=CONFIG["HOT_TOP_N"],
@@ -183,6 +246,12 @@ def main():
             market_ok=market_ok
         ) or []
         hot_symbols = [to_symbol_pair(s) for s in hot_symbols]
+
+        # —— 新增：4h 同频过滤（可开关）——
+        if hot_symbols and CONFIG.get("USE_4H_FILTER", False):
+            before_cnt = len(hot_symbols)
+            hot_symbols = _apply_4h_filter(api, hot_symbols)
+            log_info(f"[4h过滤] 候选数量：{before_cnt} -> {len(hot_symbols)}")
 
         # 打分选 TopN（若空，则仅做仓位检查）
         if hot_symbols:
@@ -277,7 +346,6 @@ def main():
     finally:
         # 确保冷却池尽力落盘（即使前面异常）
         try:
-            # 如果上面没定义 cooldown_pool，这里兜底不报错
             if "cooldown_pool" in locals():
                 save_cooldown_pool(cooldown_pool)
         except Exception:
