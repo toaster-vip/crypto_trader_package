@@ -87,7 +87,7 @@ def print_snapshot(api, tag="", extra_syms=None):
     balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
     positions = api.get_positions(simulate=CONFIG.get("SIMULATE", False))
     if CONFIG.get("LOG_DETAIL", True):
-        all_prices = api.get_all_prices()
+        all_prices = api.get_all_prices() or {}
         syms = list(positions.keys())
         if extra_syms:
             syms = list(set(syms + list(extra_syms)))
@@ -128,7 +128,7 @@ def rebalance_portfolio(
         current_round = int(time.time() // (3600 * 4))
     entry_price_state = load_entry_price_state()
 
-    top_syms_pair = [to_symbol_pair(s) for s in top_symbols]
+    top_syms_pair = [to_symbol_pair(s) for s in (top_symbols or [])]
 
     # 1. 买前快照
     print_snapshot(api, tag="买入/卖出前", extra_syms=top_syms_pair)
@@ -147,6 +147,7 @@ def rebalance_portfolio(
         get_dynamic_entry_price(k, v, entry_price_state, api=api) * get_amount(v)
         for k, v in cur_hold.items()
     )
+    # 计算位置上限（买入阶段使用）
     _ = min(total_asset * MAX_POSITION_RATIO, usdt / max(1, len(top_syms_pair))) if top_syms_pair else Decimal("0")
 
     # ========== 1) 先处理 卖出/止盈/止损 ==========
@@ -163,7 +164,7 @@ def rebalance_portfolio(
         cur_price = Decimal(str(cur_price_raw))
 
         if entry <= 0:
-            # **关键修复**：不再强平；仅跳过并警告一次（避免无限刷屏）
+            # 不强平；仅提示
             log_info(f"[警告] {sym} 缺少有效买入价（entry<=0），已跳过卖出/止损/止盈决策。")
             continue
 
@@ -197,7 +198,6 @@ def rebalance_portfolio(
             continue
 
         # 续持
-        # （控噪：不再打印两条“持有/续持”分支，减少日志）
         if CONFIG.get("LOG_DETAIL", True):
             log_info(f"[持有] {sym} | entry={entry} | cur={cur_price} | pnl={pnl:.4%}")
 
@@ -217,8 +217,8 @@ def rebalance_portfolio(
     minfunds_fallback = Decimal(str(MIN_BUY_AMOUNT))
 
     # 计算分配
-    top_count = max(1, len(top_syms_pair))
-    per_pos_usdt = min(usdt * MAX_POSITION_RATIO, usdt / top_count)
+    top_count = max(1, len(top_syms_pair)) if top_syms_pair else 0
+    per_pos_usdt = min(usdt * MAX_POSITION_RATIO, usdt / top_count) if top_count else Decimal("0")
 
     for symbol in top_syms_pair:
         sym = to_symbol_pair(symbol)
@@ -270,7 +270,8 @@ def rebalance_portfolio(
         # 更新余额，避免超配
         balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
         usdt = Decimal(str(balances.get("USDT", 0)))
-        per_pos_usdt = min(usdt * MAX_POSITION_RATIO, usdt / max(1, (top_count - buy_count)))
+        remaining_slots = max(1, (top_count - buy_count)) if top_count else 1
+        per_pos_usdt = min(usdt * MAX_POSITION_RATIO, usdt / remaining_slots)
 
     # 4) 买后快照
     print_snapshot(api, tag="买入后", extra_syms=top_syms_pair)
@@ -283,5 +284,5 @@ def rebalance_portfolio(
     log_info("[调仓结束]")
     if sold_count == 0:
         log_info("本轮未发生卖出。")
-    if buy_count == 0:
+    if buy_count == 0 and top_syms_pair:
         log_info("本轮未发生买入（可能因冷却/余额/步进限制）。")
