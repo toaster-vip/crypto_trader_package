@@ -53,12 +53,12 @@ def is_market_ok(api) -> bool:
 
 # ====== 4h 同频过滤参数（可在 config.py 里覆盖）======
 USE_4H_FILTER            = _cfg("USE_4H_FILTER", True)
-MIN_PCT_4H               = float(_cfg("MIN_PCT_4H", 0.005))     # +0.5% 起步
+MIN_PCT_4H               = float(_cfg("MIN_PCT_4H", 0.005))     # +0.5%
 EMA_WINDOW_1H            = int(_cfg("EMA_WINDOW_1H", 6))        # 近6小时 EMA
 REQUIRE_LAST1H_ABOVE_EMA = _cfg("REQUIRE_LAST1H_ABOVE_EMA", True)
-MIN_VOL_FACTOR           = float(_cfg("MIN_VOL_FACTOR", 1.1))   # 近6根 / 全部均量
+MIN_VOL_FACTOR           = float(_cfg("MIN_VOL_FACTOR", 1.1))   # 近6根/全样本均量
 RELAX_ON_FEW             = _cfg("RELAX_ON_FEW", True)
-RELAX_FACTOR             = float(_cfg("RELAX_FACTOR", 0.8))     # 阈值宽松 20%
+RELAX_FACTOR             = float(_cfg("RELAX_FACTOR", 0.8))     # 放宽 20%
 EPS                      = float(_cfg("EPS", 1e-8))
 
 def _passes_4h_filter(api, symbol, pct4h_thresh, vol_factor_thresh, require_above_ema):
@@ -93,10 +93,13 @@ def _passes_4h_filter(api, symbol, pct4h_thresh, vol_factor_thresh, require_abov
 
     return bool(ok_pct4h and last_above_ema and ok_vol)
 
-def get_top_gainers_and_volume(api, top_n=30, exclude_symbols=None, market_ok=True):
+def get_top_gainers_and_volume(api, top_n=None, exclude_symbols=None, market_ok=True):
     """
     :return: USDT 热门候选币列表（已应用 4h 同频硬过滤 + 候选不足自动放宽）
     """
+    if top_n is None:
+        top_n = int(_cfg("HOT_TOP_N", 20))
+
     all_tickers = api.get_all_tickers()
     if not all_tickers:
         log_debug("未获取到任何行情，热点榜为空！")
@@ -115,21 +118,19 @@ def get_top_gainers_and_volume(api, top_n=30, exclude_symbols=None, market_ok=Tr
     # 基础候选：交集优先，不足并集补齐
     candidates = list(set(gainers_24h) & set(vol_top))
     if len(candidates) < top_n // 2:
-        candidates = list(set(gainers_24h + vol_top))[:top_n]
+        candidates = list(dict.fromkeys(gainers_24h + vol_top))[:top_n]
 
-    # —— 市况差时“退火”：少选且更严（保留原逻辑，但后续仍会做4h硬过滤）——
-    if not market_ok:
-        soften = max(1, int(_cfg("TOP_N", 2) * _cfg("MARKET_SOFTEN_FACTOR", 0.5)))
-        strict = []
+    # 市况差时：先把“4h上行”的放在前面（优先而非硬性必须）
+    if not market_ok and candidates:
+        strict, relax = [], []
         for s in candidates:
             df = api.get_klines(s, '1hour', 8)
             if df is None or len(df) < 4:
-                continue
+                relax.append(s); continue
             open_4h = float(df['open'].iloc[-4])
             close_now = float(df['close'].iloc[-1])
-            if close_now > open_4h:  # 4h上行
-                strict.append(s)
-        candidates = (strict[:soften] or candidates[:soften])
+            (strict if close_now > open_4h else relax).append(s)
+        candidates = (strict + [x for x in relax if x not in strict])[:max(top_n, _cfg("TOP_N", 2))]
 
     # —— 4h 同频硬过滤（可开关）——
     filtered = [s for s in candidates if s not in exclude_symbols]
@@ -139,21 +140,38 @@ def get_top_gainers_and_volume(api, top_n=30, exclude_symbols=None, market_ok=Tr
         require_ema  = REQUIRE_LAST1H_ABOVE_EMA
 
         hard = [s for s in filtered if _passes_4h_filter(api, s, pct4h_thresh, volf_thresh, require_ema)]
+        log_debug(f"4h硬滤后剩余: {len(hard)} / {len(filtered)}")
 
         # 候选不足自动放宽
-        min_need = max(_cfg("TOP_N", 2), max(1, top_n // 4))
+        min_need = max(int(_cfg("TOP_N", 2)), max(1, top_n // 4))
         if RELAX_ON_FEW and len(hard) < min_need:
-            pct4h_relaxed = pct4h_thresh * RELAX_FACTOR     # 阈值放宽 20%
-            volf_relaxed  = volf_thresh * RELAX_FACTOR
+            pct4h_relaxed = pct4h_thresh * RELAX_FACTOR
+            volf_relaxed  = volf_thresh  * RELAX_FACTOR
             hard_relaxed  = [s for s in filtered if _passes_4h_filter(api, s, pct4h_relaxed, volf_relaxed, require_ema)]
-            # 合并去重，优先保留严格筛到的
             seen = set(hard)
             hard = hard + [s for s in hard_relaxed if s not in seen]
+            log_debug(f"放宽阈值后: {len(hard)} / 目标至少 {min_need}")
 
         filtered = hard
 
-    log_debug(f"热点候选池: {filtered}")
-    return filtered
+    # 退火兜底：仍不足则扩大候选池（成交额、涨幅各加一档）
+    need = max(int(_cfg("TOP_N", 2)), 1)
+    if len(filtered) < need:
+        vol_more = [s for s, _ in sorted(usdt_tickers.items(),
+                                         key=lambda x: float(x[1].get('volValue', 0.0)),
+                                         reverse=True) if s not in exclude_symbols]
+        gain_more = [s for s, _ in sorted(usdt_tickers.items(),
+                                          key=lambda x: float(x[1].get('changeRate', 0.0)),
+                                          reverse=True) if s not in exclude_symbols]
+        merged = list(dict.fromkeys(filtered + vol_more[:2*top_n] + gain_more[:2*top_n]))
+        filtered = merged
+
+    # 最终裁剪
+    final_n = max(need, top_n)
+    out = filtered[:final_n]
+
+    log_debug(f"热点候选池({len(out)}): {out[:10]}{' ...' if len(out)>10 else ''}")
+    return out
 
 def get_klines(api, symbol, interval='1hour', limit=100):
     df = api.get_klines(symbol, interval, limit)
@@ -187,8 +205,8 @@ def get_symbol_score(api, symbol):
     score = 1.2 * pct_24h + 2.0 * pct_4h + 1.0 * vol_spike
 
     is_extreme = abs(pct_4h) > _cfg("EXTREME_PCT_THRESHOLD", 0.20)
-
     turnover_last = float(df['turnover'].iloc[-1]) if 'turnover' in df.columns else 0.0
+
     return {
         "score": float(score),
         "turnover": turnover_last,
