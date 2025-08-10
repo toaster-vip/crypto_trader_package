@@ -9,6 +9,7 @@ from kucoin_api import to_symbol_pair
 
 ENTRY_PRICE_FILE = "/home/linuxuser/crypto_trader_package/entry_price_state.json"
 COOLDOWN_FILE = "/home/linuxuser/crypto_trader_package/cooldown_pool.json"
+HOLD_AGE_FILE = "/home/linuxuser/crypto_trader_package/hold_age_state.json"  # 新增：持仓寿命记录
 
 def load_entry_price_state():
     if os.path.exists(ENTRY_PRICE_FILE):
@@ -29,6 +30,16 @@ def load_cooldown_pool():
 def save_cooldown_pool(pool):
     with open(COOLDOWN_FILE, "w") as f:
         json.dump(pool, f)
+
+def load_hold_age_state():
+    if os.path.exists(HOLD_AGE_FILE):
+        with open(HOLD_AGE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_hold_age_state(state):
+    with open(HOLD_AGE_FILE, "w") as f:
+        json.dump(state, f)
 
 def calc_weighted_avg_entry_price(api, symbol, amount_min=1e-6):
     fills = api.get_fills(symbol, side="buy", limit=100)
@@ -68,8 +79,12 @@ TRAILING_STOP_PCT = Decimal(str(CONFIG["TRAILING_STOP_PCT"]))
 MAX_POSITION_RATIO = Decimal(str(CONFIG["MAX_POSITION_RATIO"]))
 MIN_BUY_AMOUNT = Decimal(str(CONFIG["MIN_BUY_AMOUNT"]))
 COOLDOWN_ROUNDS = CONFIG.get("COOLDOWN_ROUNDS", 3)
-# 新增：非热点止盈退出比例（1.0=全仓清掉，0.5=卖半仓）
+# 非热点止盈退出比例（1.0=全清，0.5=卖半仓）
 TAKE_PROFIT_EXIT_PCT = Decimal(str(CONFIG.get("TAKE_PROFIT_EXIT_PCT", 1.0)))
+# —— 新增：去碎片化参数，可在 config.py 覆盖 ——
+MAX_HOLD_ROUNDS = int(CONFIG.get("MAX_HOLD_ROUNDS", 10))     # 最多持有轮数（4h/轮）
+SMALL_PNL_EXIT = Decimal(str(CONFIG.get("SMALL_PNL_EXIT", 0.02)))  # ±2% 视为小幅波动
+MIN_MERGE_AMOUNT = Decimal(str(CONFIG.get("MIN_MERGE_AMOUNT", 7)))  # 市值<7 USDT 清理
 
 def get_amount(pos):
     if isinstance(pos, dict):
@@ -123,15 +138,13 @@ def rebalance_portfolio(
     cooldown_pool=None, current_round=None, cooldown_rounds=COOLDOWN_ROUNDS
 ):
     """
-    执行调仓逻辑；返回本轮 summary，用于上层（main_trader）发送 Server 酱通知。
-    summary 结构：
-    {
-      "sells": [{"symbol","amount","entry","price","pnl_pct","reason","cooldown_until"}],
-      "buys":  [{"symbol","funds","price","orderid"}],
-      "holds": [{"symbol","amount","price","entry","pnl_pct"}],
-      "cooldown_updates": [{"symbol","until"}],
-      "notes": ["ZEE-USDT: 无价跳过", "XXX: entry<=0", ...]
-    }
+    执行调仓逻辑；返回 summary 供上层推送。
+    summary:
+      sells: [{"symbol","amount","entry","price","pnl_pct","reason","cooldown_until"}]
+      buys:  [{"symbol","funds","price","orderid"}]
+      holds: [{"symbol","amount","price","entry","pnl_pct"}]
+      cooldown_updates: [{"symbol","until"}]
+      notes: [...]
     """
     if api is None:
         raise ValueError("必须传入唯一的 KuCoinClient api 实例！（主控请用 rebalance_portfolio(..., api=api)）")
@@ -139,11 +152,12 @@ def rebalance_portfolio(
         cooldown_pool = load_cooldown_pool()
     if current_round is None:
         current_round = int(time.time() // (3600 * 4))
+
     entry_price_state = load_entry_price_state()
+    hold_age_state = load_hold_age_state()  # 新增
 
     top_syms_pair = [to_symbol_pair(s) for s in (top_symbols or [])]
 
-    # ==== 本轮汇总 ====
     summary = {
         "sells": [],
         "buys": [],
@@ -171,8 +185,10 @@ def rebalance_portfolio(
     )
     _ = min(total_asset * MAX_POSITION_RATIO, usdt / max(1, len(top_syms_pair))) if top_syms_pair else Decimal("0")
 
-    # ========== 1) 先处理 卖出/止盈/止损 ==========
+    # ========== 1) 先处理 卖出/止盈/止损/寿命/微仓 ==========
     sold_count = 0
+    fully_sold_syms = set()  # 记录被全清的仓位，用于寿命表清理
+
     for symbol, pos in cur_hold.items():
         sym = to_symbol_pair(symbol)
         amount = get_amount(pos)
@@ -188,12 +204,11 @@ def rebalance_portfolio(
         if entry <= 0:
             log_info(f"[警告] {sym} 缺少有效买入价（entry<=0），已跳过卖出/止损/止盈决策。")
             summary["notes"].append(f"{sym}: entry<=0")
-            continue
+            # 即便缺 entry，也允许做微仓清理与寿命退出（基于市值）
+        pnl = (cur_price - entry) / (entry + Decimal('1e-8')) if entry > 0 else Decimal("0")
 
-        pnl = (cur_price - entry) / (entry + Decimal('1e-8'))
-
-        # —— 止损：任何情况下都执行，并进入冷却 ——
-        if pnl <= STOP_LOSS:
+        # 1) 止损（强规则）
+        if entry > 0 and pnl <= STOP_LOSS:
             trade = {
                 "type": "sell_candidate",
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -213,6 +228,7 @@ def rebalance_portfolio(
                 entry_price_state.pop(sym, None)
             log_info(f"[止损] {sym} 触发止损并冷却{cooldown_rounds}轮 | entry={entry} | cur={cur_price} | pnl={pnl:.4%}")
             sold_count += 1
+            fully_sold_syms.add(sym)
             summary["sells"].append({
                 "symbol": sym,
                 "amount": float(amount),
@@ -225,16 +241,15 @@ def rebalance_portfolio(
             summary["cooldown_updates"].append({"symbol": sym, "until": int(cooldown_until)})
             continue
 
-        # —— 动态止盈（仍在TopN内）：只上移 entry，不卖 —— 
-        if sym in top_syms_pair and pnl >= TAKE_PROFIT:
-            entry_price_state[sym] = float(cur_price)  # “锁盈”，继续持有让利润奔跑
+        # 2) 动态止盈（仍在TopN）→ 上移成本，不卖
+        if sym in top_syms_pair and entry > 0 and pnl >= TAKE_PROFIT:
+            entry_price_state[sym] = float(cur_price)
             log_info(f"[动态止盈] {sym} 达止盈线且仍在TopN，上移entry至 {cur_price} | 原entry: {entry} | pnl={pnl:.4%}")
-            continue
+            # 不 return，继续看是否需要做微仓/寿命处理（一般不会触发）
 
-        # —— 非热点 + 达到止盈：按比例卖出（默认100%全清）——
-        if sym not in top_syms_pair and pnl >= TAKE_PROFIT and TAKE_PROFIT_EXIT_PCT > 0:
+        # 3) 非热点 + 达止盈 → 按比例卖出（默认全清）
+        if sym not in top_syms_pair and entry > 0 and pnl >= TAKE_PROFIT and TAKE_PROFIT_EXIT_PCT > 0:
             sell_amt = (amount * TAKE_PROFIT_EXIT_PCT).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
-            # 防极小量误差
             if sell_amt > 0:
                 if not dry_run:
                     place_order('sell', sym, float(sell_amt))
@@ -260,13 +275,75 @@ def rebalance_portfolio(
                     "reason": reason,
                     "cooldown_until": None
                 })
-                # 如果基本全清了，清理entry缓存
                 if sell_amt >= amount * Decimal("0.999"):
                     entry_price_state.pop(sym, None)
-                else:
-                    # 保留entry不变，方便后续基于原成本线的风险判断
-                    pass
-                continue
+                    fully_sold_syms.add(sym)
+                # 若为部分止盈，继续落到后面的寿命/微仓判断（通常不会触发）
+
+        # 4) 持仓寿命退出（轻规则）：超过轮数 & 小幅波动
+        age = int(hold_age_state.get(sym, 0))
+        if age >= MAX_HOLD_ROUNDS:
+            # 仅在小幅波动内才触发，避免把明显盈利或亏损中的仓位无脑处理
+            if entry <= 0 or abs(pnl) <= SMALL_PNL_EXIT:
+                if not dry_run:
+                    place_order('sell', sym, float(amount))
+                sold_count += 1
+                fully_sold_syms.add(sym)
+                reason = "MAX_HOLD_EXIT"
+                log_info(f"[寿命退出] {sym} 持有>= {MAX_HOLD_ROUNDS} 轮且波动小（|pnl|≤{SMALL_PNL_EXIT:.2%}），清仓退出。")
+                log_trade_detail({
+                    "type": "sell",
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "symbol": sym,
+                    "amount": float(amount),
+                    "base_price": float(entry) if entry > 0 else "NA",
+                    "current_price": float(cur_price),
+                    "pnl_pct": float(pnl) if entry > 0 else "NA",
+                    "reason": reason
+                })
+                summary["sells"].append({
+                    "symbol": sym,
+                    "amount": float(amount),
+                    "entry": float(entry) if entry > 0 else 0.0,
+                    "price": float(cur_price),
+                    "pnl_pct": float(pnl) if entry > 0 else 0.0,
+                    "reason": reason,
+                    "cooldown_until": None
+                })
+                # 清理 entry
+                entry_price_state.pop(sym, None)
+                continue  # 已清仓
+
+        # 5) 微仓合并（轻规则）：市值过小直接清理
+        pos_value = amount * cur_price
+        if pos_value < MIN_MERGE_AMOUNT:
+            if not dry_run:
+                place_order('sell', sym, float(amount))
+            sold_count += 1
+            fully_sold_syms.add(sym)
+            reason = "MERGE_EXIT"
+            log_info(f"[微仓清理] {sym} 仓位市值≈{pos_value:.4f} USDT < {MIN_MERGE_AMOUNT}，清仓回收。")
+            log_trade_detail({
+                "type": "sell",
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "symbol": sym,
+                "amount": float(amount),
+                "base_price": float(entry) if entry > 0 else "NA",
+                "current_price": float(cur_price),
+                "pnl_pct": float(pnl) if entry > 0 else "NA",
+                "reason": reason
+            })
+            summary["sells"].append({
+                "symbol": sym,
+                "amount": float(amount),
+                "entry": float(entry) if entry > 0 else 0.0,
+                "price": float(cur_price),
+                "pnl_pct": float(pnl) if entry > 0 else 0.0,
+                "reason": reason,
+                "cooldown_until": None
+            })
+            entry_price_state.pop(sym, None)
+            continue
 
         # —— 续持（未触发任何条件）——
         if CONFIG.get("LOG_DETAIL", True):
@@ -279,9 +356,21 @@ def rebalance_portfolio(
                 "pnl_pct": float(pnl),
             })
 
+    # 持仓寿命表更新：卖光的删；仍持有的 +1
+    # 重新拉 positions，防止上面已卖出
+    positions_after_sells = api.get_positions(simulate=CONFIG.get("SIMULATE", False))
+    still_holding_syms = set(to_symbol_pair(k) for k, v in positions_after_sells.items() if get_amount(v) > 0)
+    # 删除已全清的
+    for s in list(hold_age_state.keys()):
+        if s not in still_holding_syms:
+            hold_age_state.pop(s, None)
+    # 仍持有的 +1
+    for s in still_holding_syms:
+        hold_age_state[s] = int(hold_age_state.get(s, 0)) + 1
+
     # 2) 卖出后快照
     balances = api.get_balances(simulate=CONFIG.get("SIMULATE", False))
-    positions = api.get_positions(simulate=CONFIG.get("SIMULATE", False))
+    positions = positions_after_sells
     all_prices = api.get_all_prices() or {}
     print_snapshot(api, tag="卖出后", extra_syms=top_syms_pair)
     print_cooldown_pool(cooldown_pool, current_round)
@@ -306,8 +395,8 @@ def rebalance_portfolio(
             continue
 
         # 已持有跳过
-        positions = api.get_positions(simulate=CONFIG.get("SIMULATE", False))
-        hold_syms = set(to_symbol_pair(k) for k in positions.keys() if get_amount(positions[k]) > 0)
+        positions_now = api.get_positions(simulate=CONFIG.get("SIMULATE", False))
+        hold_syms = set(to_symbol_pair(k) for k in positions_now.keys() if get_amount(positions_now[k]) > 0)
         if sym in hold_syms:
             continue
 
@@ -335,6 +424,8 @@ def rebalance_portfolio(
             entry_price = api.get_symbol_price(sym)
             if entry_price is not None:
                 entry_price_state[sym] = float(entry_price)
+            # 新买入的寿命置 0
+            hold_age_state[sym] = 0
             log_trade_detail({
                 "type": "buy",
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -362,9 +453,10 @@ def rebalance_portfolio(
     print_snapshot(api, tag="买入后", extra_syms=top_syms_pair)
     print_cooldown_pool(cooldown_pool, current_round)
 
-    # 5) 落盘
+    # 5) 落盘（entry、冷却、寿命）
     save_entry_price_state(entry_price_state)
     save_cooldown_pool(cooldown_pool)
+    save_hold_age_state(hold_age_state)
 
     log_info("[调仓结束]")
     if sold_count == 0:
@@ -372,5 +464,4 @@ def rebalance_portfolio(
     if buy_count == 0 and top_syms_pair:
         log_info("本轮未发生买入（可能因冷却/余额/步进限制）。")
 
-    # 返回 summary，供 main_trader 组织 Server 酱通知
     return summary
