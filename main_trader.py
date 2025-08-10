@@ -4,7 +4,6 @@ import os
 import json
 import concurrent.futures
 import traceback
-import pandas as pd  # 用于计算 EMA
 
 from config import CONFIG
 from strategy import is_market_ok, get_top_gainers_and_volume, get_symbol_score
@@ -82,7 +81,6 @@ def build_run_summary_md(
     notes = summary.get("notes", []) if summary else []
     cd_updates = summary.get("cooldown_updates", []) if summary else []
 
-    # 概览
     overview = []
     overview.append(f"- 市场过滤：{'✅' if market_ok else '❌'}")
     overview.append(f"- 候选/TopN：{len(hot_symbols or [])} / {len(top_symbols or [])}")
@@ -90,7 +88,6 @@ def build_run_summary_md(
     overview.append(f"- USDT：{usdt_b:.2f} → {usdt_a:.2f}")
     overview.append(f"- 用时：{elapsed_s:.2f}s")
 
-    # 卖出表
     sell_lines = [
         "| symbol | amount | entry | price | PnL% | reason | cooldown |",
         "|---|---:|---:|---:|---:|---|---:|",
@@ -103,7 +100,6 @@ def build_run_summary_md(
         )
     sells_md = "\n".join(sell_lines) if sells else "_无_"
 
-    # 买入表
     buy_lines = ["| symbol | funds(USDT) | price | orderid |", "|---|---:|---:|---|"]
     for b in buys:
         pr = b.get("price")
@@ -113,17 +109,11 @@ def build_run_summary_md(
         )
     buys_md = "\n".join(buy_lines) if buys else "_无_"
 
-    # 冷却池变化
     cd_md = ", ".join([f"{c.get('symbol','')}→{c.get('until','')}" for c in cd_updates]) if cd_updates else "_无_"
-
-    # 告警/异常
     notes_md = ("; ".join(notes)) if notes else "_无_"
-
-    # TopN/候选（精简）
     hot_md = ", ".join((hot_symbols or [])[:10]) + (" ..." if hot_symbols and len(hot_symbols) > 10 else "")
     top_md = ", ".join(top_symbols or [])
 
-    # 组装 Markdown
     md = []
     md.append("## 概览")
     md.extend(overview)
@@ -149,68 +139,6 @@ def fetch_score(api, symbol):
     except Exception as e:
         log_error(f"评分失败 {symbol}: {e}")
         return symbol, {"score": -999, "turnover": 0, "open": 0, "is_new_coin": True, "is_extreme": True}
-
-def _apply_4h_filter(api, candidates):
-    """
-    根据 config 的 4h 条件过滤候选池：
-      - pct_4h >= MIN_PCT_4H
-      - (可选) 收盘 > 1h EMA(EMA_WINDOW_1H)
-      - 近6根均量 / 全部均量 >= MIN_VOL_FACTOR
-    如过滤后数量仍 < TOP_N 且开启放宽，则按 RELAX_FACTOR 放宽条件后再筛一遍。
-    """
-    if not CONFIG.get("USE_4H_FILTER", False):
-        return candidates  # 未开启，直接返回
-
-    if not candidates:
-        return candidates
-
-    ema_win = int(CONFIG.get("EMA_WINDOW_1H", 10))
-    min_pct_4h = float(CONFIG.get("MIN_PCT_4H", 0.01))
-    min_vol_factor = float(CONFIG.get("MIN_VOL_FACTOR", 1.1))
-    require_above_ema = bool(CONFIG.get("REQUIRE_LAST1H_ABOVE_EMA", True))
-
-    def _pass(sym, pct4h_thr, vol_factor_thr, require_ema):
-        df = api.get_klines(sym, "1hour", max(ema_win + 6, 8))
-        if df is None or len(df) < 4:
-            return False
-        close = df["close"].astype(float).values
-        vol = df["volume"].astype(float).values
-
-        open_4h = float(df["open"].iloc[-4])
-        close_now = float(df["close"].iloc[-1])
-        pct_4h = (close_now - open_4h) / (open_4h + CONFIG["EPS"])
-
-        # EMA
-        if require_ema:
-            ema = pd.Series(close).ewm(span=ema_win, adjust=False).mean().iloc[-1]
-            ema_ok = close_now > float(ema)
-        else:
-            ema_ok = True
-
-        # 量能
-        vol_recent = vol[-6:].mean() if len(vol) >= 6 else vol.mean()
-        vol_all = vol.mean()
-        vol_ok = (vol_recent / (vol_all + CONFIG["EPS"])) >= vol_factor_thr
-
-        return (pct_4h >= pct4h_thr) and ema_ok and vol_ok
-
-    # 第一次严格筛
-    strict_list = [s for s in candidates if _pass(s, min_pct_4h, min_vol_factor, require_above_ema)]
-
-    # 如果太少，看是否需要放宽
-    if CONFIG.get("RELAX_ON_FEW", True) and len(strict_list) < CONFIG.get("TOP_N", 2):
-        relax = float(CONFIG.get("RELAX_FACTOR", 0.7))
-        # 放宽：降低涨幅&量能阈值；EMA 条件不放宽（也可以按需改为放宽）
-        looser_list = [s for s in candidates if _pass(s, min_pct_4h * relax, min_vol_factor * relax, require_above_ema)]
-        # 如果还是不够，就回退到原 candidates 的前 TOP_N（兜底，保证策略可运行）
-        if len(looser_list) < CONFIG.get("TOP_N", 2):
-            log_info(f"[4h过滤] 过滤后不足TOP_N，已启用兜底（原候选前N）")
-            return candidates[:CONFIG.get("TOP_N", 2)]
-        log_info(f"[4h过滤] 放宽后通过：{looser_list}")
-        return looser_list
-
-    log_info(f"[4h过滤] 通过：{strict_list}")
-    return strict_list
 
 def main():
     init_logger(CONFIG.get("LOG_LEVEL"))
@@ -238,7 +166,7 @@ def main():
         market_ok = is_market_ok(api)
         log_info(f"市场过滤结果 market_ok={market_ok}")
 
-        # 候选池（基础：24h涨幅 & 成交额）
+        # 候选池（strategy 内部已包含 4h 硬过滤 + 动态放宽）
         hot_symbols = get_top_gainers_and_volume(
             api,
             top_n=CONFIG["HOT_TOP_N"],
@@ -246,16 +174,14 @@ def main():
             market_ok=market_ok
         ) or []
         hot_symbols = [to_symbol_pair(s) for s in hot_symbols]
-
-        # —— 新增：4h 同频过滤（可开关）——
-        if hot_symbols and CONFIG.get("USE_4H_FILTER", False):
-            before_cnt = len(hot_symbols)
-            hot_symbols = _apply_4h_filter(api, hot_symbols)
-            log_info(f"[4h过滤] 候选数量：{before_cnt} -> {len(hot_symbols)}")
-
-        # 打分选 TopN（若空，则仅做仓位检查）
         if hot_symbols:
             log_info(f"本轮热点池: {hot_symbols}")
+        else:
+            log_error("本轮无热点币（可能因市场过滤或行情为空），本轮仅检查持仓止盈/止损，不新开仓")
+
+        # 打分选 TopN
+        if hot_symbols:
+            log_info(f"当前成交额门槛 MIN_TURNOVER_1H={CONFIG.get('MIN_TURNOVER_1H')}")
             symbol_scores = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG["DEFAULT_WORKERS"]) as executor:
                 future_map = {executor.submit(fetch_score, api, s): s for s in hot_symbols}
@@ -280,7 +206,6 @@ def main():
                 top_symbols = [x[0] for x in symbol_scores[:CONFIG["TOP_N"]]]
                 log_info(f"本轮选中TopN: {top_symbols}")
         else:
-            log_error("本轮无热点币（可能因市场过滤或行情为空），本轮仅检查持仓止盈/止损，不新开仓")
             top_symbols = []
 
         # 快照（前）
@@ -303,7 +228,7 @@ def main():
             cooldown_rounds=COOLDOWN_ROUNDS
         ) or {}
 
-        # 冷却池保存（即使 summary 为空也要保存可能的变更）
+        # 冷却池保存
         save_cooldown_pool(cooldown_pool)
 
         # 快照（后）
@@ -335,7 +260,6 @@ def main():
 
     except Exception as e:
         log_error(f"main_trader 未捕获异常：{e}\n{traceback.format_exc()}")
-        # 异常时也尽量发一条告警
         try:
             elapsed = time.time() - start_ts
             title = "[告警] main_trader 异常退出"
@@ -344,7 +268,6 @@ def main():
         except Exception:
             pass
     finally:
-        # 确保冷却池尽力落盘（即使前面异常）
         try:
             if "cooldown_pool" in locals():
                 save_cooldown_pool(cooldown_pool)
