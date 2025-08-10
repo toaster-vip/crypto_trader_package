@@ -51,14 +51,17 @@ def is_market_ok(api) -> bool:
     log_debug(f"市场过滤：bases={bases}, OK={ok}, oks={oks}")
     return ok
 
-# ====== 4h 同频过滤参数（可在 config.py 里覆盖）======
-USE_4H_FILTER            = _cfg("USE_4H_FILTER", True)
+# ====== 4h 同频过滤参数（从 config 接入，可动态放宽）======
+USE_4H_FILTER            = bool(_cfg("USE_4H_FILTER", True))
 MIN_PCT_4H               = float(_cfg("MIN_PCT_4H", 0.005))     # +0.5%
 EMA_WINDOW_1H            = int(_cfg("EMA_WINDOW_1H", 6))        # 近6小时 EMA
-REQUIRE_LAST1H_ABOVE_EMA = _cfg("REQUIRE_LAST1H_ABOVE_EMA", True)
+REQUIRE_LAST1H_ABOVE_EMA = bool(_cfg("REQUIRE_LAST1H_ABOVE_EMA", True))
 MIN_VOL_FACTOR           = float(_cfg("MIN_VOL_FACTOR", 1.1))   # 近6根/全样本均量
-RELAX_ON_FEW             = _cfg("RELAX_ON_FEW", True)
-RELAX_FACTOR             = float(_cfg("RELAX_FACTOR", 0.8))     # 放宽 20%
+RELAX_ON_FEW             = bool(_cfg("RELAX_ON_FEW", True))
+RELAX_FACTOR             = float(_cfg("RELAX_FACTOR", 0.8))     # 阈值一次性放宽比例
+AUTO_RELAX_ENABLED       = bool(_cfg("AUTO_RELAX_ENABLED", True))
+AUTO_RELAX_MIN_CAND      = int(_cfg("AUTO_RELAX_MIN_CAND", 6))
+AUTO_RELAX_STEPS         = list(_cfg("AUTO_RELAX_STEPS", []))
 EPS                      = float(_cfg("EPS", 1e-8))
 
 def _passes_4h_filter(api, symbol, pct4h_thresh, vol_factor_thresh, require_above_ema):
@@ -93,9 +96,19 @@ def _passes_4h_filter(api, symbol, pct4h_thresh, vol_factor_thresh, require_abov
 
     return bool(ok_pct4h and last_above_ema and ok_vol)
 
+def _hard_filter_batch(api, symbols, pct4h, volf, require_ema):
+    """批量执行 4h 硬过滤并返回通过列表"""
+    out = [s for s in symbols if _passes_4h_filter(api, s, pct4h, volf, require_ema)]
+    log_debug(f"[4h过滤] 阈值 pct4h>={pct4h:.4f}, volf>={volf:.2f}, requireEMA={require_ema} -> 通过 {len(out)}/{len(symbols)}")
+    return out
+
 def get_top_gainers_and_volume(api, top_n=None, exclude_symbols=None, market_ok=True):
     """
-    :return: USDT 热门候选币列表（已应用 4h 同频硬过滤 + 候选不足自动放宽）
+    生成 USDT 热门候选币列表：
+      - 24h 涨幅 & 成交额双因子
+      - 4h 同频硬过滤（可关）
+      - 候选不足：先单次放宽（RELAX_FACTOR），再按 AUTO_RELAX_STEPS 逐级放宽；
+        同时把 CONFIG['MIN_TURNOVER_1H'] 写成更低的门槛，配合 main_trader 的成交额过滤。
     """
     if top_n is None:
         top_n = int(_cfg("HOT_TOP_N", 20))
@@ -139,22 +152,49 @@ def get_top_gainers_and_volume(api, top_n=None, exclude_symbols=None, market_ok=
         volf_thresh  = MIN_VOL_FACTOR
         require_ema  = REQUIRE_LAST1H_ABOVE_EMA
 
-        hard = [s for s in filtered if _passes_4h_filter(api, s, pct4h_thresh, volf_thresh, require_ema)]
-        log_debug(f"4h硬滤后剩余: {len(hard)} / {len(filtered)}")
+        hard = _hard_filter_batch(api, filtered, pct4h_thresh, volf_thresh, require_ema)
 
-        # 候选不足自动放宽
+        # 第一层：候选太少，按 RELAX_FACTOR 整体放宽一次
         min_need = max(int(_cfg("TOP_N", 2)), max(1, top_n // 4))
         if RELAX_ON_FEW and len(hard) < min_need:
-            pct4h_relaxed = pct4h_thresh * RELAX_FACTOR
-            volf_relaxed  = volf_thresh  * RELAX_FACTOR
-            hard_relaxed  = [s for s in filtered if _passes_4h_filter(api, s, pct4h_relaxed, volf_relaxed, require_ema)]
+            hard_relaxed = _hard_filter_batch(
+                api,
+                filtered,
+                pct4h_thresh * RELAX_FACTOR,
+                volf_thresh  * RELAX_FACTOR,
+                require_ema
+            )
             seen = set(hard)
             hard = hard + [s for s in hard_relaxed if s not in seen]
-            log_debug(f"放宽阈值后: {len(hard)} / 目标至少 {min_need}")
+            log_debug(f"[4h放宽一次] 数量 {len(hard)} / 目标至少 {min_need}")
+
+        # 第二层：启用阶梯式动态放宽（并同步降低 MIN_TURNOVER_1H，供 main_trader 使用）
+        if AUTO_RELAX_ENABLED and len(hard) < max(AUTO_RELAX_MIN_CAND, min_need) and AUTO_RELAX_STEPS:
+            for i, step in enumerate(AUTO_RELAX_STEPS, 1):
+                pct_mul  = float(step.get("MIN_PCT_4H_MUL", 1.0))
+                vol_mul  = float(step.get("MIN_VOL_FACTOR_MUL", 1.0))
+                req_ema  = bool(step.get("REQUIRE_EMA", require_ema))
+                hard2 = _hard_filter_batch(
+                    api,
+                    filtered,
+                    pct4h_thresh * pct_mul,
+                    volf_thresh  * vol_mul,
+                    req_ema
+                )
+                # 合并
+                seen = set(hard)
+                hard = hard + [s for s in hard2 if s not in seen]
+                # 同步成交额门槛（影响后续 scoring 阶段过滤）
+                new_turnover = int(step.get("MIN_TURNOVER_1H_ABS", _cfg("MIN_TURNOVER_1H", 40000)))
+                if new_turnover < _cfg("MIN_TURNOVER_1H", 40000):
+                    CONFIG["MIN_TURNOVER_1H"] = new_turnover
+                log_debug(f"[动态放宽 step{i}] cand={len(hard)} / 目标>= {max(AUTO_RELAX_MIN_CAND, min_need)}; MIN_TURNOVER_1H→{CONFIG['MIN_TURNOVER_1H']}")
+                if len(hard) >= max(AUTO_RELAX_MIN_CAND, min_need):
+                    break
 
         filtered = hard
 
-    # 退火兜底：仍不足则扩大候选池（成交额、涨幅各加一档）
+    # 退火兜底：仍不足则扩大候选池（成交额、涨幅各加一档），避免选不出
     need = max(int(_cfg("TOP_N", 2)), 1)
     if len(filtered) < need:
         vol_more = [s for s, _ in sorted(usdt_tickers.items(),
