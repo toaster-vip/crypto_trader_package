@@ -15,7 +15,7 @@ CONFIG = {
     "MIN_KLINE_ROWS": 36,
     "EPS": 1e-8,
 
-    # === 盈亏风控（保持不变）===
+    # === 盈亏风控 ===
     "TAKE_PROFIT": 0.07,
     "STOP_LOSS": -0.04,
     "TRAILING_STOP_PCT": 0.018,
@@ -43,7 +43,7 @@ CONFIG = {
     "REQUIRE_LAST1H_ABOVE_EMA": True,
     "MIN_VOL_FACTOR": 1.05,
 
-    # 当候选明显不足时，是否“自动放宽”（在 strategy 里按需读取）
+    # 当候选明显不足时，是否“自动放宽”（strategy 会读取）
     "RELAX_ON_FEW": True,
     # 一次性放宽比例（用于快速补量）：例如 0.6 = 阈值放到 60%
     "RELAX_FACTOR": 0.6,
@@ -52,15 +52,16 @@ CONFIG = {
     # 目标最少候选数（小于该值就进入放宽流程）
     "AUTO_RELAX_ENABLED": True,
     "AUTO_RELAX_MIN_CAND": 6,   # 建议 >= TOP_N*3
-    # 放宽阶梯（从上到下依次尝试；未在 strategy 中使用时可忽略）
+    # 放宽阶梯（从上到下依次尝试）
     "AUTO_RELAX_STEPS": [
-        # step1：轻度放宽
-        {"MIN_PCT_4H_MUL": 0.8, "MIN_VOL_FACTOR_MUL": 0.9, "MIN_TURNOVER_1H_ABS": 30000, "REQUIRE_EMA": True},
-        # step2：中度放宽
+        {"MIN_PCT_4H_MUL": 0.8, "MIN_VOL_FACTOR_MUL": 0.9,  "MIN_TURNOVER_1H_ABS": 30000, "REQUIRE_EMA": True},
         {"MIN_PCT_4H_MUL": 0.6, "MIN_VOL_FACTOR_MUL": 0.85, "MIN_TURNOVER_1H_ABS": 25000, "REQUIRE_EMA": False},
-        # step3：重度放宽（尽量仍保留一定体量约束）
-        {"MIN_PCT_4H_MUL": 0.5, "MIN_VOL_FACTOR_MUL": 0.8, "MIN_TURNOVER_1H_ABS": 20000, "REQUIRE_EMA": False},
+        {"MIN_PCT_4H_MUL": 0.5, "MIN_VOL_FACTOR_MUL": 0.8,  "MIN_TURNOVER_1H_ABS": 20000, "REQUIRE_EMA": False},
     ],
+
+    # —— 打分阶段的自适应成交额放宽（main_trader 用）——
+    # 逐级把 MIN_TURNOVER_1H 乘以这些系数尝试放宽；最终还不够才兜底
+    "TURNOVER_RELAX_STEPS": [0.7, 0.5],
 
     # === 去碎仓/持仓寿命（rebalancer 用）===
     "MAX_HOLD_ROUNDS": 10,   # 超过则触发“寿命退出”（仅小波动时）
@@ -74,6 +75,7 @@ CONFIG = {
     # === 回测与模拟 ===
     "DRY_RUN": False,
     "SIMULATE": False,
+    "SIMULATE_START_BALANCE": 120,  # 兼容性：有的模块叫 SIM_START_BALANCE
     "SIM_START_BALANCE": 120,
 
     # === 日志与推送 ===
