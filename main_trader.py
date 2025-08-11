@@ -179,32 +179,67 @@ def main():
         else:
             log_error("本轮无热点币（可能因市场过滤或行情为空），本轮仅检查持仓止盈/止损，不新开仓")
 
-        # 打分选 TopN
+        # —— 打分选 TopN：自适应成交额门槛 + 兜底 ——
         if hot_symbols:
             log_info(f"当前成交额门槛 MIN_TURNOVER_1H={CONFIG.get('MIN_TURNOVER_1H')}")
-            symbol_scores = []
+
+            # 1) 对所有候选并行打分（不先过滤）
+            scored = []  # (symbol, score_obj)
             with concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG["DEFAULT_WORKERS"]) as executor:
-                future_map = {executor.submit(fetch_score, api, s): s for s in hot_symbols}
-                for fut in concurrent.futures.as_completed(future_map):
-                    s = future_map[fut]
+                futures = {executor.submit(fetch_score, api, s): s for s in hot_symbols}
+                for fut in concurrent.futures.as_completed(futures):
+                    s = futures[fut]
                     try:
                         sym, sc = fut.result()
+                        scored.append((sym, sc))
                     except Exception as e:
                         log_error(f"评分线程异常 {s}: {e}")
-                        continue
-                    if sc.get("turnover", 0) < CONFIG["MIN_TURNOVER_1H"]:
-                        continue
-                    if sc.get("is_extreme", False):
-                        continue
-                    symbol_scores.append((sym, sc.get("score", -999), sc))
 
-            if not symbol_scores:
-                log_error("有效候选为0（成交额不足或极端波动剔除），本轮仅检查持仓止盈/止损，不新开仓")
+            if not scored:
+                log_error("评分为空，本轮仅检查持仓止盈/止损，不新开仓")
                 top_symbols = []
             else:
-                symbol_scores.sort(key=lambda x: x[1], reverse=True)
-                top_symbols = [x[0] for x in symbol_scores[:CONFIG["TOP_N"]]]
-                log_info(f"本轮选中TopN: {top_symbols}")
+                # 2) 自适应选择：先严后松，最后兜底至少拿 1 个
+                base_thr = float(CONFIG.get("MIN_TURNOVER_1H", 80000))
+                relax_steps = CONFIG.get("TURNOVER_RELAX_STEPS", [0.7, 0.5])  # 在 config 可调
+                extreme_flag_disallow = True    # 初始不接受“极端”标记
+                extreme_flag_allow = False      # 兜底时允许
+
+                def pick_with_threshold(turnover_thr: float, allow_extreme: bool):
+                    pool = []
+                    for sym, sc in scored:
+                        if sc.get("turnover", 0) < turnover_thr:
+                            continue
+                        if (not allow_extreme) and sc.get("is_extreme", False):
+                            continue
+                        pool.append((sym, sc))
+                    pool.sort(key=lambda x: x[1].get("score", -999), reverse=True)
+                    return [p[0] for p in pool[:CONFIG["TOP_N"]]]
+
+                # 严格门槛
+                top_symbols = pick_with_threshold(base_thr, allow_extreme=extreme_flag_disallow)
+
+                # 逐级放宽成交额门槛
+                if len(top_symbols) < CONFIG["TOP_N"]:
+                    for r in relax_steps:
+                        thr2 = base_thr * float(r)
+                        log_info(f"[自适应] 放宽成交额门槛到 {int(thr2)}（系数 {r}）")
+                        top_symbols = pick_with_threshold(thr2, allow_extreme=extreme_flag_disallow)
+                        if len(top_symbols) >= CONFIG["TOP_N"]:
+                            break
+
+                # 兜底：仍不足则允许“极端”标记里分数最高的至少 1 个
+                if len(top_symbols) < 1:
+                    thr3 = base_thr * (relax_steps[-1] if relax_steps else 0.5)
+                    log_info(f"[兜底] 允许极端，并以成交额阈值 {int(thr3)} 再尝试选择 1 个")
+                    cand = pick_with_threshold(thr3, allow_extreme=extreme_flag_allow)
+                    top_symbols = cand[:1] if cand else []
+
+                top_symbols = list(dict.fromkeys(top_symbols))
+                if top_symbols:
+                    log_info(f"本轮选中TopN: {top_symbols}")
+                else:
+                    log_error("有效候选为0（自适应后仍不足），本轮仅检查持仓止盈/止损，不新开仓")
         else:
             top_symbols = []
 
