@@ -43,7 +43,7 @@ def is_market_ok(api) -> bool:
         close = df["close"].astype(float).values
         ma_now = _ma(close, win)
         ma_prev = _ma(close[:-1], win)
-        slope_ok = ma_now >= ma_prev  # MA不下行
+        slope_ok = ma_now >= ma_prev  # MA 不下行
         dd24 = _pct(close[-1], close[-24])
         dd_ok = dd24 >= worst_dd_limit
         oks.append(slope_ok and dd_ok)
@@ -53,12 +53,12 @@ def is_market_ok(api) -> bool:
 
 # ====== 4h 同频过滤参数（从 config 接入，可动态放宽）======
 USE_4H_FILTER            = bool(_cfg("USE_4H_FILTER", True))
-MIN_PCT_4H               = float(_cfg("MIN_PCT_4H", 0.005))     # +0.5%
+MIN_PCT_4H               = float(_cfg("MIN_PCT_4H", 0.003))     # 默认 +0.3%
 EMA_WINDOW_1H            = int(_cfg("EMA_WINDOW_1H", 6))        # 近6小时 EMA
 REQUIRE_LAST1H_ABOVE_EMA = bool(_cfg("REQUIRE_LAST1H_ABOVE_EMA", True))
-MIN_VOL_FACTOR           = float(_cfg("MIN_VOL_FACTOR", 1.1))   # 近6根/全样本均量
+MIN_VOL_FACTOR           = float(_cfg("MIN_VOL_FACTOR", 1.05))  # 近6根/全样本均量
 RELAX_ON_FEW             = bool(_cfg("RELAX_ON_FEW", True))
-RELAX_FACTOR             = float(_cfg("RELAX_FACTOR", 0.8))     # 阈值一次性放宽比例
+RELAX_FACTOR             = float(_cfg("RELAX_FACTOR", 0.6))     # 阈值一次性放宽比例
 AUTO_RELAX_ENABLED       = bool(_cfg("AUTO_RELAX_ENABLED", True))
 AUTO_RELAX_MIN_CAND      = int(_cfg("AUTO_RELAX_MIN_CAND", 6))
 AUTO_RELAX_STEPS         = list(_cfg("AUTO_RELAX_STEPS", []))
@@ -181,14 +181,16 @@ def get_top_gainers_and_volume(api, top_n=None, exclude_symbols=None, market_ok=
                     volf_thresh  * vol_mul,
                     req_ema
                 )
-                # 合并
                 seen = set(hard)
                 hard = hard + [s for s in hard2 if s not in seen]
                 # 同步成交额门槛（影响后续 scoring 阶段过滤）
                 new_turnover = int(step.get("MIN_TURNOVER_1H_ABS", _cfg("MIN_TURNOVER_1H", 40000)))
                 if new_turnover < _cfg("MIN_TURNOVER_1H", 40000):
                     CONFIG["MIN_TURNOVER_1H"] = new_turnover
-                log_debug(f"[动态放宽 step{i}] cand={len(hard)} / 目标>= {max(AUTO_RELAX_MIN_CAND, min_need)}; MIN_TURNOVER_1H→{CONFIG['MIN_TURNOVER_1H']}")
+                log_debug(
+                    f"[动态放宽 step{i}] cand={len(hard)} / 目标>= {max(AUTO_RELAX_MIN_CAND, min_need)}; "
+                    f"MIN_TURNOVER_1H→{CONFIG['MIN_TURNOVER_1H']}"
+                )
                 if len(hard) >= max(AUTO_RELAX_MIN_CAND, min_need):
                     break
 
@@ -229,7 +231,7 @@ def get_symbol_score(api, symbol):
     其中 vol_spike = 近6根均量 / 全量均量
     """
     df = get_klines(api, symbol, '1hour', 100)
-    if df is None or len(df) < _cfg("MIN_KLINE_ROWS", 48):
+    if df is None or len(df) < _cfg("MIN_KLINE_ROWS", 36):
         return {"score": 0, "turnover": 0, "open": 0, "is_new_coin": True, "is_extreme": False}
 
     open_24h   = df['open'].iloc[-24] if len(df) >= 24 else df['open'].iloc[0]
